@@ -25,16 +25,17 @@ class ClanPrivileges(IntEnum):
 class Clan:
     """A class to represent a single gulag clan."""
     __slots__ = ('id', 'name', 'tag', 'created_at',
-                 'owner', 'members')
+                 'owner', 'members', 'description')
 
     def __init__(self, id: int, name: str, tag: str,
-                 created_at: datetime, owner: int,
+                 created_at: datetime, owner: int, description: str,
                  members: set[int] = set()) -> None:
         """A class representing one of gulag's clans."""
         self.id = id
         self.name = name
         self.tag = tag
         self.created_at = created_at
+        self.description = description
 
         self.owner = owner # userid
         self.members = members # userids

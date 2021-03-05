@@ -42,7 +42,7 @@ from utils.misc import make_safe_name
 
 """ Bancho: handle connections from the osu! client """
 
-domain = Domain(re.compile(r'^c[e4-6]?\.ppy\.sh$'))
+domain = Domain(re.compile(r'^c[e4-6]?\.sakuru\.pw$'))
 
 @domain.route('/')
 async def bancho_http_handler(conn: Connection) -> bytes:
@@ -307,7 +307,7 @@ class StatsUpdateRequest(BanchoPacket, type=Packets.OSU_REQUEST_STATUS_UPDATE):
 WELCOME_MSG = '\n'.join((
     f"Welcome to {glob.config.domain}.",
     "To see a list of commands, use !help.",
-    "We have a public (Discord)[https://discord.gg/3wWVEGrW]!",
+    "We have a public (Discord)[ttps://discord.gg/N7NVbrJDcx]!",
     "Enjoy the server!"
 ))
 
@@ -555,7 +555,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         p.bancho_priv | ClientPrivileges.Supporter
     )
 
-    data += packets.notification('Welcome back to the gulag!\n'
+    data += packets.notification('Welcome back to the Sakuru.pw!\n'
                                 f'Current build: v{glob.version}')
 
     # send all channel info.

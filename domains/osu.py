@@ -19,6 +19,7 @@ from utils.recalculator import PPCalculator
 
 import bcrypt
 import orjson
+import json
 from cmyui import _isdecimal
 from cmyui import Ansi
 from cmyui import Connection
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
 
 """ osu: handle connections from web, api, and beyond? """
 
-domain = Domain({'osu.ppy.sh', 'i.sakuru.pw'})
+domain = Domain('osu.sakuru.pw')
 
 
 """ Some helper decorators (used for /web/ connections) """
@@ -327,7 +328,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
     if not conn.args['p'].isdecimal():
         return (400, b'')
 
-    url = f'{glob.config.mirror}/api/search'
+    url = f'https://bm6.aeris-dev.pw/api/cheesegull/search'
     params = {
         'amount': 100,
         'offset': conn.args['p'],
@@ -346,7 +347,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
         if not resp or resp.status != 200:
             return b'Failed to retrieve data from mirror!'
 
-        result = await resp.json()
+        result = await resp.json(content_type='text/plain', encoding='utf-8')
 
     lresult = len(result) # send over 100 if we receive
                           # 100 matches, so the client
@@ -1401,13 +1402,24 @@ async def api_get_user(conn: Connection) -> Optional[bytes]:
     if conn.args['scope'] == 'info':
         # return user info
         query = ('SELECT id, name, safe_name, '
-                 'priv, country, silence_end ' # silence_end public?
+                 'priv, country, silence_end, clan_id, clan_priv, latest_activity ' # silence_end public?
                  'FROM users WHERE id = %s')
     else:
         # return user stats
-        query = 'SELECT * FROM stats WHERE id = %s'
+        query = 'SELECT stats.*, users.country FROM stats LEFT JOIN users USING(id) WHERE stats.id = %s'
 
     res = await glob.db.fetch(query, [pid])
+
+    for mods in ('vn', 'rx', 'ap'):
+        for mode in ('std', 'taiko', 'catch', 'mania'):
+            pp = res.get(f'pp_{mods}_{mode}')
+            if pp is not None:
+                rank = await glob.db.fetch(f'SELECT COUNT(*)+1 AS c FROM stats LEFT JOIN users USING(id) WHERE stats.pp_vn_std > {pp} AND users.priv & 1')
+                res.update({f"rank_{mods}_{mode}":f"{rank['c']}"})
+
+                crank = await glob.db.fetch(f'SELECT COUNT(*)+1 AS c FROM stats LEFT JOIN users USING(id) WHERE stats.pp_vn_std > {pp} AND users.priv & 1 AND users.country = "{res["country"]}"')
+                res.update({f"crank_{mods}_{mode}":f"{crank['c']}"})
+
     return orjson.dumps(res) if res else b'User not found.'
 
 @domain.route('/api/calc_pp')

@@ -9,7 +9,7 @@ from cmyui import Domain
 
 """ ava: avatar server (for both ingame & external) """
 
-domain = Domain({'a.ppy.sh', 'a.sakuru.pw'})
+domain = Domain('a.sakuru.pw')
 
 AVATARS_PATH = Path.cwd() / '.data/avatars'
 DEFAULT_AVATAR = AVATARS_PATH / 'default.jpg'

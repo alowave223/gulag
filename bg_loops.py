@@ -126,7 +126,7 @@ async def analyze_score(score: 'Score') -> None:
             )
 
             # TODO: think of a way to organize a thumbnail into config?
-            thumb_url = 'https://osu.magicflare.fun/static/banner.png'
+            thumb_url = 'https://osu.sakuru.pw/static/banner.png'
             embed.set_thumbnail(url=thumb_url)
 
             for key, pt in press_times.items():

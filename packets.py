@@ -987,9 +987,6 @@ def botPresence():
 def userPresence(p: 'Player') -> bytes:
     if p is glob.bot:
         return botPresence()
-    mod_priv = p.bancho_priv
-    if not p.priv & Privileges.Donator:
-        mod_priv &= ~ClientPrivileges.Supporter
 
     return write(
         Packets.CHO_USER_PRESENCE,
@@ -997,7 +994,7 @@ def userPresence(p: 'Player') -> bytes:
         (p.name, osuTypes.string),
         (p.utc_offset + 24, osuTypes.u8),
         (p.country[0], osuTypes.u8),
-        (mod_priv | (p.status.mode.as_vanilla << 5), osuTypes.u8),
+        (p.bancho_priv | (p.status.mode.as_vanilla << 5), osuTypes.u8),
         (p.location[1], osuTypes.f32), # long
         (p.location[0], osuTypes.f32), # lat
         (p.gm_stats.rank, osuTypes.i32)
