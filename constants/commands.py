@@ -1717,7 +1717,7 @@ async def clan_help(p: Player, m: 'Match', msg: Sequence[str]) -> str:
 
     return '\n'.join(cmds)
 
-@clan_commands.add(Privileges.Normal, aliases=['c'])
+@clan_commands.add(Privileges.Donator, aliases=['c'])
 async def clan_create(p: Player, c: Messageable, msg: Sequence[str]) -> str:
     """Create a clan with a given tag & name."""
     if len(msg) < 2:
@@ -1735,6 +1735,9 @@ async def clan_create(p: Player, c: Messageable, msg: Sequence[str]) -> str:
     if glob.clans.get(name=name):
         return 'That name has already been claimed by another clan.'
 
+    if len(tag) > 3:
+        return 'Tag can be only 3 symbols length!'
+
     if glob.clans.get(tag=tag):
         return 'That tag has already been claimed by another clan.'
 
@@ -1750,7 +1753,7 @@ async def clan_create(p: Player, c: Messageable, msg: Sequence[str]) -> str:
 
     # add clan to cache
     clan = Clan(id=id, name=name, tag=tag,
-                created_at=created_at, owner=p.id)
+                created_at=created_at, owner=p.id, description=None)
     glob.clans.append(clan)
 
     # set owner's clan & clan rank (cache & sql)
