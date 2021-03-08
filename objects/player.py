@@ -136,7 +136,8 @@ class Player:
         'utc_offset', 'pm_private',
         'away_msg', 'silence_end', 'in_lobby', 'osu_ver',
         'pres_filter', 'login_time', 'last_recv_time',
-        'menu_options', '_queue', '__dict__'
+        'menu_options', 'tourney_client', 'api_key',
+        '_queue', '__dict__'
     )
 
     def __init__(self, id: int, name: str,
@@ -206,6 +207,10 @@ class Player:
 
         # {id: {'callback', func, 'timeout': unixt, 'reusable': False}, ...}
         self.menu_options: dict[int, dict[str, Any]] = {}
+
+        self.tourney_client = extras.get('tourney_client', False)
+
+        self.api_key = extras.get('api_key', None)
 
         # packet queue
         self._queue = bytearray()
@@ -492,6 +497,12 @@ class Player:
             self.enqueue(packets.matchJoinFail())
             return False
 
+        if self.id in m.tourney_clients:
+            # the user is already in the match with a tourney client.
+            # users cannot spectate themselves so this is not possible.
+            self.enqueue(packets.matchJoinFail())
+            return False
+
         if self is not m.host:
             # match already exists, we're simply joining.
             # NOTE: staff members have override to pw and can
@@ -631,9 +642,9 @@ class Player:
         # update channel usercounts for all clients that can see.
         # for instanced channels, enqueue update to only players
         # in the instance; for normal channels, enqueue to all.
-        targets = c.players if c.instance else glob.players
+        recipients = c.players if c.instance else glob.players
 
-        for p in targets:
+        for p in recipients:
             p.enqueue(packets.channelInfo(*c.basic_info))
 
         if glob.config.debug:
@@ -963,9 +974,9 @@ class Player:
         """Enqueue `sender`'s `msg` to `self`. Sent in `chan`, or dm."""
         self.enqueue(
             packets.sendMessage(
-                client = sender.name,
+                sender = sender.name,
                 msg = msg,
-                target = (chan or self).name,
-                client_id = sender.id
+                recipient = (chan or self).name,
+                sender_id = sender.id
             )
         )

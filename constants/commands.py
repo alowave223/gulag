@@ -6,6 +6,7 @@ import importlib
 import random
 import re
 import time
+import uuid
 from datetime import datetime
 from time import perf_counter_ns as clock_ns
 from typing import Callable
@@ -283,6 +284,30 @@ async def request(p: Player, c: Messageable, msg: Sequence[str]) -> str:
     )
 
     return 'Request submitted.'
+
+@command(Privileges.Normal)
+async def get_apikey(p: Player, c: Messageable, msg: Sequence[str]) -> str:
+    """Generate a new api key & assign it to the player."""
+    if c is not glob.bot:
+        return f'Command only available in DMs with {glob.bot.name}.'
+
+    # remove old token
+    if p.api_key:
+        glob.api_keys.pop(p.api_key)
+
+    # generate new token
+    p.api_key = str(uuid.uuid4())
+
+    await glob.db.execute(
+        'UPDATE users '
+        'SET api_key = %s '
+        'WHERE id = %s',
+        [p.api_key, p.id]
+    )
+    glob.api_keys.update({p.api_key: p.id})
+
+    p.enqueue(packets.notification('/savelog & click popup for an easy copy.'))
+    return f'Your API key is now: {p.api_key}'
 
 """ Nominator commands
 # The commands below allow users to
