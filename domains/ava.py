@@ -7,9 +7,16 @@ from typing import Optional
 from cmyui import Connection
 from cmyui import Domain
 
+from objects import glob
+
 """ ava: avatar server (for both ingame & external) """
 
+<<<<<<< HEAD
 domain = Domain('a.sakuru.pw')
+=======
+BASE_DOMAIN = glob.config.domain
+domain = Domain({f'a.{BASE_DOMAIN}', 'a.ppy.sh'})
+>>>>>>> upstream/master
 
 AVATARS_PATH = Path.cwd() / '.data/avatars'
 DEFAULT_AVATAR = AVATARS_PATH / 'default.jpg'

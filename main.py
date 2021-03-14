@@ -24,10 +24,8 @@ from constants.privileges import Privileges
 from objects import glob
 from objects.achievement import Achievement
 from objects.collections import *
-from objects.channel import Channel
-from objects.clan import Clan
-from objects.match import MapPool
 from objects.player import Player
+from utils.misc import download_achievement_pngs
 from utils.updater import Updater
 
 __all__ = ()
@@ -35,15 +33,23 @@ __all__ = ()
 # current version of gulag
 # NOTE: this is used internally for the updater, it may be
 # worth reading through it's code before playing with it.
+<<<<<<< HEAD
 glob.version = cmyui.Version(3, 2, 3)
+=======
+glob.version = cmyui.Version(3, 2, 4)
+>>>>>>> upstream/master
 
 async def setup_collections() -> None:
     """Setup & cache many global collections (mostly from sql)."""
+    glob.players = PlayerList() # online players
+    glob.matches = MatchList() # active multiplayer matches
+
+    glob.channels = await ChannelList.prepare() # active channels
+    glob.clans = await ClanList.prepare() # active clans
+    glob.pools = await MapPoolList.prepare() # active mappools
+
     # create our bot & append it to the global player list.
     res = await glob.db.fetch('SELECT name FROM users WHERE id = 1')
-
-    # global players list
-    glob.players = PlayerList()
 
     glob.bot = Player(
         id = 1, name = res['name'], priv = Privileges.Normal,
@@ -51,6 +57,7 @@ async def setup_collections() -> None:
     )
     glob.players.append(glob.bot)
 
+<<<<<<< HEAD
     # global channels list
     glob.channels = ChannelList()
     async for row in glob.db.iterall('SELECT * FROM channels'):
@@ -88,6 +95,8 @@ async def setup_collections() -> None:
         await pool.maps_from_sql()
         glob.pools.append(pool)
 
+=======
+>>>>>>> upstream/master
     # global achievements (sorted by vn gamemodes)
     glob.achievements = {0: [], 1: [], 2: [], 3: []}
     async for row in glob.db.iterall('SELECT * FROM achievements'):
@@ -100,6 +109,10 @@ async def setup_collections() -> None:
         # NOTE: achievements are grouped by modes internally.
         glob.achievements[row['mode']].append(achievement)
 
+<<<<<<< HEAD
+=======
+    # static api keys
+>>>>>>> upstream/master
     glob.api_keys = {
         row['api_key']: row['id']
         for row in await glob.db.fetchall(
@@ -107,6 +120,19 @@ async def setup_collections() -> None:
             'WHERE api_key IS NOT NULL'
         )
     }
+<<<<<<< HEAD
+=======
+
+async def after_serving() -> None:
+    """Called after the server stops serving connections."""
+    await glob.http.close()
+
+    if glob.db.pool is not None:
+        await glob.db.close()
+
+    if glob.datadog:
+        glob.datadog.stop()
+>>>>>>> upstream/master
 
 async def before_serving() -> None:
     """Called before the server begins serving connections."""
@@ -154,14 +180,19 @@ if __name__ == '__main__':
         subdir = data_path / sub_dir
         subdir.mkdir(exist_ok=True)
 
+    achievements_path = data_path / 'assets/medals/client'
+    if not achievements_path.exists():
+        # create directory & download achievement pngs
+        achievements_path.mkdir(parents=True)
+        download_achievement_pngs(achievements_path)
+
     # make sure oppai-ng is built and ready.
-    if not (Path.cwd() / 'oppai-ng/oppai').exists():
-        glob.oppai_built = False
+    glob.oppai_built = (Path.cwd() / 'oppai-ng/oppai').exists()
+
+    if not glob.oppai_built:
         log('No oppai-ng compiled binary found. PP for all '
-            'scores will be set to 0; instructions can be '
-            'found in the README file.', Ansi.LRED)
-    else:
-        glob.oppai_built = True
+            'std & taiko scores will be set to 0; instructions '
+            'can be found in the README file.', Ansi.LRED)
 
     # create a server object, which serves as a map of domains.
     app = cmyui.Server(name=f'gulag v{glob.version}',
@@ -177,6 +208,7 @@ if __name__ == '__main__':
     # enqueue a task to run once the
     # server begins serving connections.
     app.before_serving = before_serving
+    app.after_serving = after_serving
 
     # support for https://datadoghq.com
     if all(glob.config.datadog.values()):
@@ -195,4 +227,8 @@ if __name__ == '__main__':
     # start up the server; this starts
     # an event loop internally, using
     # uvloop if it's installed.
+<<<<<<< HEAD
     app.run(glob.config.server_addr)
+=======
+    app.run(glob.config.server_addr, sigusr1_restart=True)
+>>>>>>> upstream/master

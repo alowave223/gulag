@@ -42,7 +42,13 @@ from utils.misc import make_safe_name
 
 """ Bancho: handle connections from the osu! client """
 
+<<<<<<< HEAD
 domain = Domain(re.compile(r'^c[e4-6]?\.sakuru\.pw$'))
+=======
+BASE_DOMAIN = glob.config.domain
+_domain_escaped = BASE_DOMAIN.replace('.', r'\.')
+domain = Domain(re.compile(rf'^c[e4-6]?\.(?:{_domain_escaped}|ppy\.sh)$'))
+>>>>>>> upstream/master
 
 @domain.route('/')
 async def bancho_http_handler(conn: Connection) -> bytes:
@@ -85,7 +91,11 @@ async def bancho_handler(conn: Connection) -> bytes:
     if not player:
         # token not found; chances are that we just restarted
         # the server - tell their client to reconnect immediately.
+<<<<<<< HEAD
         return packets.notification('Server is restarting') + \
+=======
+        return packets.notification('Server has restarted.') + \
+>>>>>>> upstream/master
                packets.restartServer(0) # send 0ms since server is up
 
     # restricted users may only use certain packet handlers.
@@ -305,7 +315,7 @@ class StatsUpdateRequest(BanchoPacket, type=Packets.OSU_REQUEST_STATUS_UPDATE):
 # Some messages to send on welcome/restricted/etc.
 # TODO: these should probably be moved to the config.
 WELCOME_MSG = '\n'.join((
-    f"Welcome to {glob.config.domain}.",
+    f"Welcome to {BASE_DOMAIN}.",
     "To see a list of commands, use !help.",
     "We have a public (Discord)[ttps://discord.gg/N7NVbrJDcx]!",
     "Enjoy the server!"
@@ -623,12 +633,16 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         if not p.priv & Privileges.Verified:
             # this is the player's first login, verify their
             # account & send info about the server/its usage.
+<<<<<<< HEAD
             p.add_privs(Privileges.Verified)
+=======
+            await p.add_privs(Privileges.Verified)
+>>>>>>> upstream/master
 
             if p.id == 3:
                 # this is the first player registering on
                 # the server, grant them full privileges.
-                p.add_privs(
+                await p.add_privs(
                     Privileges.Staff | Privileges.Nominator |
                     Privileges.Whitelisted | Privileges.Tournament |
                     Privileges.Donator | Privileges.Alumni
@@ -808,10 +822,12 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
                         }
 
                         # calc pp if possible
-                        if not glob.oppai_built:
+                        if mode_vn in (0, 1) and not glob.oppai_built:
                             msg = 'No oppai-ng binary was found at startup.'
-                        elif mode_vn not in (0, 1):
+                        elif mode_vn == 2: # TODO: catch
                             msg = 'PP not yet supported for that mode.'
+                        elif mode_vn == 3 and bmap.mode.as_vanilla != 3:
+                            msg = 'Mania converts not yet supported.'
                         else:
                             if match['mods'] is not None:
                                 # [1:] to remove leading whitespace
@@ -819,22 +835,27 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
                             else:
                                 mods = Mods.NOMOD
 
-                            if mods not in bmap.pp_cache:
+                            if mods not in bmap.pp_cache[mode_vn]:
                                 await bmap.cache_pp(mods)
 
                             # since this is a DM to the bot, we should
                             # send back a list of general PP values.
-                            _msg = [bmap.embed]
-                            if mods:
-                                _msg.append(f'+{mods!r}')
+                            if mode_vn in (0, 1): # use acc
+                                _keys = (
+                                    f'{acc:.2f}%'
+                                    for acc in glob.config.pp_cached_accs
+                                )
+                            elif mode_vn == 3: # use score
+                                _keys = (
+                                    f'{int(score // 1000)}k'
+                                    for score in glob.config.pp_cached_scores
+                                )
 
-                            msg = f"{' '.join(_msg)}: " + ' | '.join([
-                                f'{acc}%: {pp:.2f}pp'
-                                for acc, pp in zip(
-                                    (90, 95, 98, 99, 100),
-                                    bmap.pp_cache[mods]
-                                )])
-
+                            pp_cache = bmap.pp_cache[mode_vn][mods]
+                            msg = ' | '.join([
+                                f'{k}: {pp:,.2f}pp'
+                                for k, pp in zip(_keys, pp_cache)
+                            ])
                     else:
                         msg = 'Could not find map.'
 
