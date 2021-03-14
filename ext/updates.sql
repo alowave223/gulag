@@ -279,9 +279,6 @@ alter table users change clan_rank clan_priv tinyint(1) default 0 not null;
 # v3.2.3
 alter table users add api_key char(36) default NULL null;
 create unique index users_api_key_uindex on users (api_key);
-<<<<<<< HEAD
-=======
 
 # v3.2.4
 update achievements set file = replace(file, 'ctb', 'fruits') where mode = 2;
->>>>>>> upstream/master

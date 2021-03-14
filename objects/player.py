@@ -977,11 +977,6 @@ class Player:
         self.enqueue(
             packets.sendMessage(
                 sender = sender.name,
-<<<<<<< HEAD
-                msg = msg,
-                recipient = (chan or self).name,
-                sender_id = sender.id
-=======
                 msg = msg,
                 recipient = (chan or self).name,
                 sender_id = sender.id
@@ -998,6 +993,5 @@ class Player:
                 msg = msg,
                 recipient = self.name,
                 sender_id = bot.id
->>>>>>> upstream/master
             )
         )

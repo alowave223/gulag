@@ -33,11 +33,7 @@ __all__ = ()
 # current version of gulag
 # NOTE: this is used internally for the updater, it may be
 # worth reading through it's code before playing with it.
-<<<<<<< HEAD
-glob.version = cmyui.Version(3, 2, 3)
-=======
 glob.version = cmyui.Version(3, 2, 4)
->>>>>>> upstream/master
 
 async def setup_collections() -> None:
     """Setup & cache many global collections (mostly from sql)."""
@@ -57,46 +53,6 @@ async def setup_collections() -> None:
     )
     glob.players.append(glob.bot)
 
-<<<<<<< HEAD
-    # global channels list
-    glob.channels = ChannelList()
-    async for row in glob.db.iterall('SELECT * FROM channels'):
-        chan = Channel(
-            name = row['name'],
-            topic = row['topic'],
-            read_priv = Privileges(row['read_priv']),
-            write_priv = Privileges(row['write_priv']),
-            auto_join = row['auto_join'] == 1
-        )
-
-        glob.channels.append(chan)
-
-    # global matches list
-    glob.matches = MatchList()
-
-    # global clans list
-    glob.clans = ClanList()
-    async for row in glob.db.iterall('SELECT * FROM clans'):
-        clan = Clan(**row)
-
-        await clan.members_from_sql()
-        glob.clans.append(clan)
-
-    # global mappools list
-    glob.pools = MapPoolList()
-    async for row in glob.db.iterall('SELECT * FROM tourney_pools'):
-        pool = MapPool(
-            id = row['id'],
-            name = row['name'],
-            created_at = row['created_at'],
-            created_by = await glob.players.get_ensure(id=row['created_by'])
-        )
-
-        await pool.maps_from_sql()
-        glob.pools.append(pool)
-
-=======
->>>>>>> upstream/master
     # global achievements (sorted by vn gamemodes)
     glob.achievements = {0: [], 1: [], 2: [], 3: []}
     async for row in glob.db.iterall('SELECT * FROM achievements'):
@@ -109,10 +65,7 @@ async def setup_collections() -> None:
         # NOTE: achievements are grouped by modes internally.
         glob.achievements[row['mode']].append(achievement)
 
-<<<<<<< HEAD
-=======
     # static api keys
->>>>>>> upstream/master
     glob.api_keys = {
         row['api_key']: row['id']
         for row in await glob.db.fetchall(
@@ -120,8 +73,6 @@ async def setup_collections() -> None:
             'WHERE api_key IS NOT NULL'
         )
     }
-<<<<<<< HEAD
-=======
 
 async def after_serving() -> None:
     """Called after the server stops serving connections."""
@@ -132,7 +83,6 @@ async def after_serving() -> None:
 
     if glob.datadog:
         glob.datadog.stop()
->>>>>>> upstream/master
 
 async def before_serving() -> None:
     """Called before the server begins serving connections."""
@@ -227,8 +177,4 @@ if __name__ == '__main__':
     # start up the server; this starts
     # an event loop internally, using
     # uvloop if it's installed.
-<<<<<<< HEAD
-    app.run(glob.config.server_addr)
-=======
     app.run(glob.config.server_addr, sigusr1_restart=True)
->>>>>>> upstream/master

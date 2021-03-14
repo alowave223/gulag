@@ -15,11 +15,7 @@ username = rcomp(r'^[\w \[\]-]{2,15}$')
 email = rcomp(r'^[^@\s]{1,200}@[^@\s\.]{1,30}\.[^@\.\s]{2,24}$')
 now_playing = rcomp(
     r'^\x01ACTION is (?:playing|editing|watching|listening to) '
-<<<<<<< HEAD
-    r'\[https://osu\.(ppy\.sh|sakuru\.pw)/b/(?P<bid>\d{1,7}) .+\]'
-=======
     rf'\[https://osu\.(?:{_domain_escaped}|ppy\.sh)/b/(?P<bid>\d{{1,7}}) .+\]'
->>>>>>> upstream/master
     r'(?: <(?P<mode_vn>Taiko|CatchTheBeat|osu!mania)>)?'
     r'(?P<mods>(?: (?:-|\+|~|\|)\w+(?:~|\|)?)+)?\x01$'
 )

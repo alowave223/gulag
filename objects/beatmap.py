@@ -187,20 +187,12 @@ class Beatmap:
     @property
     def url(self):
         """The osu! beatmap url for `self`."""
-<<<<<<< HEAD
-        return f'https://osu.sakuru.pw/b/{self.id}'
-=======
         return f'https://{BASE_DOMAIN}/b/{self.id}'
->>>>>>> upstream/master
 
     @property
     def set_url(self) -> str:
         """The osu! beatmap set url for `self`."""
-<<<<<<< HEAD
-        return f'https://osu.sakuru.pw/s/{self.set_id}'
-=======
         return f'https://{BASE_DOMAIN}/s/{self.set_id}'
->>>>>>> upstream/master
 
     @property
     def embed(self) -> str:

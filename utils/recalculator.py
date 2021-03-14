@@ -17,15 +17,9 @@ BEATMAPS_PATH = Path.cwd() / '.data/osu'
 
 
 class PPCalculator:
-<<<<<<< HEAD
-    """Asynchronously wraps the process of calculating difficulty in osu!."""   
-
-    def __init__(self, map_id: int, **kwargs) -> None:
-=======
     """Asynchronously wraps the process of calculating difficulty in osu!."""
     __slots__ = ('file', 'mode_vn', 'pp_attrs')
     def __init__(self, map_id: int, **pp_attrs) -> None:
->>>>>>> upstream/master
         # NOTE: this constructor should not be called
         # unless you are CERTAIN the map is on disk
         # for normal usage, use the classmethods
@@ -77,28 +71,6 @@ class PPCalculator:
 
     async def perform(self) -> tuple[float, float]:
         """Perform the calculations with the current state, returning (pp, sr)."""
-<<<<<<< HEAD
-        # TODO: PLEASE rewrite this with c bindings,
-        # add ways to get specific stuff like aim pp
-
-        # for now, we'll generate a bash command and
-        # use subprocess to do the calculations (yikes).
-        cmd = [f'./oppai-ng/oppai {self.file}']
-
-        if self.mods:
-            cmd.append(f'+{self.mods!r}')
-        if self.combo:
-            cmd.append(f'{self.combo}x')
-        if self.nmiss:
-            cmd.append(f'{self.nmiss}xM')
-        if self.acc:
-            cmd.append(f'{self.acc:.4f}%')
-
-        if self.mode_vn:
-            if self.mode_vn not in (0, 1):
-                # oppai-ng only supports std & taiko
-                # TODO: osu!catch & mania support
-=======
         if self.mode_vn in (0, 1): # oppai-ng for std & taiko
             # TODO: PLEASE rewrite this with c/py bindings,
             # add ways to get specific stuff like aim pp
@@ -132,7 +104,6 @@ class PPCalculator:
             if stdout[:8] != b'binoppai':
                 # invalid output from oppai-ng
                 log(f'oppai-ng err: {stdout}', Ansi.LRED)
->>>>>>> upstream/master
                 return (0.0, 0.0)
 
             err_code = struct.unpack('<i', stdout[11:15])[0]
@@ -147,10 +118,6 @@ class PPCalculator:
                 log(f'oppai-ng: broken map: {self.file} (inf pp).', Ansi.LYELLOW)
                 return (0.0, 0.0)
 
-<<<<<<< HEAD
-        stdout, _ = await proc.communicate()  # stderr not needed
-        output = orjson.loads(stdout.decode())
-=======
             sr = struct.unpack('<f', stdout[-32:-28])[0]
 
             return (pp, sr)
@@ -162,18 +129,12 @@ class PPCalculator:
             if 'score' not in self.pp_attrs:
                 log('Err: pp calculator needs score for mania.', Ansi.LRED)
                 return (0.0, 0.0)
->>>>>>> upstream/master
 
             if 'mods' in self.pp_attrs:
                 mods = int(self.pp_attrs['mods'])
             else:
                 mods = 0
 
-<<<<<<< HEAD
-        await proc.wait()  # wait for exit
-        return output['pp'], output['stars']
-=======
             calc = Maniera(self.file, mods, self.pp_attrs['score'])
             calc.calculate()
             return (calc.pp, calc.sr)
->>>>>>> upstream/master

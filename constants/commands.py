@@ -7,13 +7,9 @@ import os
 import random
 import re
 import time
-<<<<<<< HEAD
-import uuid
-=======
 import signal
 import uuid
 from collections import Counter
->>>>>>> upstream/master
 from datetime import datetime
 from importlib.metadata import version as pkg_version
 from time import perf_counter_ns as clock_ns
@@ -345,19 +341,6 @@ async def request(ctx: Context) -> str:
     return 'Request submitted.'
 
 @command(Privileges.Normal)
-<<<<<<< HEAD
-async def get_apikey(p: Player, c: Messageable, msg: Sequence[str]) -> str:
-    """Generate a new api key & assign it to the player."""
-    if c is not glob.bot:
-        return f'Command only available in DMs with {glob.bot.name}.'
-
-    # remove old token
-    if p.api_key:
-        glob.api_keys.pop(p.api_key)
-
-    # generate new token
-    p.api_key = str(uuid.uuid4())
-=======
 async def get_apikey(ctx: Context) -> str:
     """Generate a new api key & assign it to the player."""
     if ctx.recipient is not glob.bot:
@@ -369,27 +352,17 @@ async def get_apikey(ctx: Context) -> str:
 
     # generate new token
     ctx.player.api_key = str(uuid.uuid4())
->>>>>>> upstream/master
 
     await glob.db.execute(
         'UPDATE users '
         'SET api_key = %s '
         'WHERE id = %s',
-<<<<<<< HEAD
-        [p.api_key, p.id]
-    )
-    glob.api_keys.update({p.api_key: p.id})
-
-    p.enqueue(packets.notification('/savelog & click popup for an easy copy.'))
-    return f'Your API key is now: {p.api_key}'
-=======
         [ctx.player.api_key, ctx.player.id]
     )
     glob.api_keys.update({ctx.player.api_key: ctx.player.id})
 
     ctx.player.enqueue(packets.notification('/savelog & click popup for an easy copy.'))
     return f'Your API key is now: {ctx.player.api_key}'
->>>>>>> upstream/master
 
 """ Nominator commands
 # The commands below allow users to
@@ -1882,13 +1855,8 @@ async def clan_help(ctx: Context) -> str:
 
     return '\n'.join(cmds)
 
-<<<<<<< HEAD
-@clan_commands.add(Privileges.Donator, aliases=['c'])
-async def clan_create(p: Player, c: Messageable, msg: Sequence[str]) -> str:
-=======
 @clan_commands.add(Privileges.Normal, aliases=['c'])
 async def clan_create(ctx: Context) -> str:
->>>>>>> upstream/master
     """Create a clan with a given tag & name."""
     if len(ctx.args) < 2:
         return 'Invalid syntax: !clan create <tag> <name>'
@@ -1923,11 +1891,7 @@ async def clan_create(ctx: Context) -> str:
 
     # add clan to cache
     clan = Clan(id=id, name=name, tag=tag,
-<<<<<<< HEAD
-                created_at=created_at, owner=p.id, description=None)
-=======
                 created_at=created_at, owner=ctx.player.id)
->>>>>>> upstream/master
     glob.clans.append(clan)
 
     # set owner's clan & clan rank (cache & sql)

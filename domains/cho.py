@@ -42,13 +42,9 @@ from utils.misc import make_safe_name
 
 """ Bancho: handle connections from the osu! client """
 
-<<<<<<< HEAD
-domain = Domain(re.compile(r'^c[e4-6]?\.sakuru\.pw$'))
-=======
 BASE_DOMAIN = glob.config.domain
 _domain_escaped = BASE_DOMAIN.replace('.', r'\.')
-domain = Domain(re.compile(rf'^c[e4-6]?\.(?:{_domain_escaped}|ppy\.sh)$'))
->>>>>>> upstream/master
+domain = Domain(re.compile(rf'^c[e4-6]?\.(?:{_domain_escaped})$'))
 
 @domain.route('/')
 async def bancho_http_handler(conn: Connection) -> bytes:
