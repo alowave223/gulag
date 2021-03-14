@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 
 import asyncio
-import math
-import struct
 from pathlib import Path
 
 import aiohttp
+import orjson
 from cmyui import Ansi
 from cmyui import log
 
@@ -15,8 +14,10 @@ __all__ = ('PPCalculator',)
 
 BEATMAPS_PATH = Path.cwd() / '.data/osu'
 
+
 class PPCalculator:
-    """Asynchronously wraps the process of calculating difficulty in osu!."""
+    """Asynchronously wraps the process of calculating difficulty in osu!."""   
+
     def __init__(self, map_id: int, **kwargs) -> None:
         # NOTE: this constructor should not be called
         # unless you are CERTAIN the map is on disk
@@ -73,12 +74,16 @@ class PPCalculator:
 
         # for now, we'll generate a bash command and
         # use subprocess to do the calculations (yikes).
-        cmd = [f'oppai-ng/oppai', self.file]
+        cmd = [f'./oppai-ng/oppai {self.file}']
 
-        if self.mods:  cmd.append(f'+{self.mods!r}')
-        if self.combo: cmd.append(f'{self.combo}x')
-        if self.nmiss: cmd.append(f'{self.nmiss}xM')
-        if self.acc:   cmd.append(f'{self.acc:.4f}%')
+        if self.mods:
+            cmd.append(f'+{self.mods!r}')
+        if self.combo:
+            cmd.append(f'{self.combo}x')
+        if self.nmiss:
+            cmd.append(f'{self.nmiss}xM')
+        if self.acc:
+            cmd.append(f'{self.acc:.4f}%')
 
         if self.mode_vn:
             if self.mode_vn not in (0, 1):
@@ -90,31 +95,23 @@ class PPCalculator:
             if self.mode_vn == 1:
                 cmd.append('-otaiko')
 
-        cmd.append('-obinary')
+        # XXX: could probably use binary to save a bit
+        # of time.. but in reality i should just write
+        # some bindings lmao this is so cursed overall
+        cmd.append('-ojson')
 
-        # run the oppai-ng binary & read stdout.
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout = asyncio.subprocess.PIPE
+        # join & run the command
+        pipe = asyncio.subprocess.PIPE
+
+        proc = await asyncio.create_subprocess_shell(
+            ' '.join(cmd), stdout=pipe, stderr=pipe
         )
-        stdout, _ = await proc.communicate() # stderr not needed
 
-        if stdout[:8] != b'binoppai':
-            # invalid output from oppai-ng
-            log(f'oppai-ng err: {stdout}', Ansi.LRED)
-            return (0.0, 0.0)
+        stdout, _ = await proc.communicate()  # stderr not needed
+        output = orjson.loads(stdout.decode())
 
-        err_code = struct.unpack('<i', stdout[11:15])[0]
+        if 'code' not in output or output['code'] != 200:
+            log(f"oppai-ng: {output['errstr']}", Ansi.LRED)
 
-        if err_code < 0:
-            log(f'oppai-ng: err code {err_code}.', Ansi.LRED)
-            return (0.0, 0.0)
-
-        pp = struct.unpack('<f', stdout[-4:])[0]
-
-        if math.isinf(pp):
-            log(f'oppai-ng: broken map: {self.file} (inf pp).', Ansi.LYELLOW)
-            return (0.0, 0.0)
-
-        sr = struct.unpack('<f', stdout[-32:-28])[0]
-
-        return pp, sr
+        await proc.wait()  # wait for exit
+        return output['pp'], output['stars']

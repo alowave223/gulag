@@ -348,7 +348,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
     if not conn.args['p'].isdecimal():
         return (400, b'')
 
-    url = f'https://bm6.aeris-dev.pw/api/cheesegull/search'
+    url = f'https://hentai.ninja/api/search'
     params = {
         'amount': 100,
         'offset': conn.args['p'],
@@ -362,12 +362,11 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
         # convert to osu!api status
         status = RankedStatus.from_osudirect(int(conn.args['r']))
         params |= {'status': status.osu_api}
-
     async with glob.http.get(url, params=params) as resp:
         if not resp or resp.status != 200:
             return b'Failed to retrieve data from mirror!'
 
-        result = await resp.json(content_type='text/plain', encoding='utf-8')
+        result = await resp.json()
 
     lresult = len(result)  # send over 100 if we receive
     # 100 matches, so the client
@@ -580,7 +579,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
 
             if prev_n1 and s.player.id != prev_n1['id']:
                 ann.append(
-                    '(Previous #1: [https://osu.ppy.sh/u/{id} {name}])'.format(**prev_n1))
+                    '(Previous #1: [https://sakuru.pw/u/{id} {name}])'.format(**prev_n1))
 
             s.player.enqueue(packets.notification(
                 f'You achieved #1! ({performance})'))
