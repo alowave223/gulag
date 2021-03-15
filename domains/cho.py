@@ -87,11 +87,7 @@ async def bancho_handler(conn: Connection) -> bytes:
     if not player:
         # token not found; chances are that we just restarted
         # the server - tell their client to reconnect immediately.
-<<<<<<< HEAD
-        return packets.notification('Server is restarting') + \
-=======
         return packets.notification('Server has restarted.') + \
->>>>>>> upstream/master
                packets.restartServer(0) # send 0ms since server is up
 
     # restricted users may only use certain packet handlers.
@@ -629,11 +625,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         if not p.priv & Privileges.Verified:
             # this is the player's first login, verify their
             # account & send info about the server/its usage.
-<<<<<<< HEAD
-            p.add_privs(Privileges.Verified)
-=======
             await p.add_privs(Privileges.Verified)
->>>>>>> upstream/master
 
             if p.id == 3:
                 # this is the first player registering on

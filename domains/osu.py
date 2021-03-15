@@ -6,6 +6,7 @@ import random
 import re
 import struct
 import time
+import datetime
 from collections import defaultdict
 from enum import IntEnum
 from enum import unique
@@ -28,6 +29,8 @@ from cmyui import Domain
 from cmyui import log
 from cmyui import ratelimit
 from cmyui import rstring
+from cmyui.discord import Webhook
+from cmyui.discord import Embed
 
 import packets
 from constants import regexes
@@ -387,6 +390,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
         status = RankedStatus.from_osudirect(int(conn.args['r']))
         params |= {'status': status.osu_api}
 
+    print(params)
     async with glob.http.get(search_url, params=params) as resp:
         if not resp:
             from utils.misc import point_of_interest
@@ -396,7 +400,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
             if resp.status == 404:
                 return b'0' # no maps found
             elif resp.status != 200:
-                breakpoint()
+                return b'0'
         else: # cheesegull
             if resp.status != 200:
                 return b'Failed to retrieve data from mirror!'
@@ -405,7 +409,6 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
 
         if USING_CHIMU:
             if result['code'] != 0:
-                breakpoint()
                 return b'Failed to retrieve data from mirror!'
             result = result['data']
 
@@ -834,6 +837,40 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         )))
 
         ret = '\n'.join(charts).encode()
+    
+    notif_caps = glob.config.notif_caps[s.mode]
+
+    if s.status == SubmissionStatus.BEST and s.pp >= notif_caps:
+        webhook_url = glob.config.webhooks['audit-log']
+        webhook = Webhook(url=webhook_url)
+
+        if not s.max_combo <= s.max_combo - 20 and s.nmiss == 0:
+            status = "FC"
+        else:
+            if s.nmiss > 0:
+                status = f'{s.max_combo}/{s.bmap.max_combo} {s.nmiss}xMiss'
+            else:
+                status = f'{s.max_combo}/{s.bmap.max_combo} SB'
+        
+        embed = Embed(
+            title = f'__New {s.status!r} Score! **{s.pp:.2f}pp**__',
+            description = f'▸ [{s.mode!r}] • #{stats.rank} • {stats.pp} • {stats.acc:.2f}%\n▸ {status} • {s.grade} • {s.mods!r} • {s.acc:.2f}%\n[{s.bmap.artist} - {s.bmap.title} [{s.bmap.version}]](https://sakuru.pw/direct?id={s.bmap.set_id})',
+            color=0xbb0ebe,
+            timestamp = datetime.datetime.utcnow()
+        )
+
+        embed.set_author(
+            url = s.player.url,
+            name = s.player.name,
+            icon_url = s.player.avatar_url
+        )
+
+        embed.set_image(url=f'https://assets.ppy.sh/beatmaps/{s.bmap.set_id}/covers/cover.jpg')
+        embed.set_footer(
+            text=f"played on sakuru.pw"
+        )
+        webhook.add_embed(embed)
+        await webhook.post(glob.http)
 
     log(f'[{s.mode!r}] {s.player} submitted a score! ({s.status!r})', Ansi.LGREEN)
     return ret
@@ -1320,6 +1357,7 @@ async def checkUpdates(conn: Connection) -> Optional[bytes]:
 # GET /api/get_friends: return a list of the player's friends.
 # POST/PUT /api/set_player_info: update user information (updates whatever received).
 
+JSON = orjson.dumps
 DATETIME_OFFSET = 0x89F7FF5F7B58000
 SCOREID_BORDERS = tuple((((1 << 64) - 1) // 3) * i for i in range(1, 4))
 
@@ -1429,8 +1467,6 @@ async def api_get_player_status(conn: Connection) -> Optional[bytes]:
     else:
         bmap = None
 
-    set_id = bmap.set_id if bmap else 0
-
     return JSON({
         'online': True,
         'login_time': p.login_time,
@@ -1527,6 +1563,11 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
     else:
         limit = 25
 
+    if (bm := conn.args.get('bm', None)) is not None:
+        bm = bm
+    else:
+        bm = None
+
     # build sql query & fetch info
 
     query = [
@@ -1549,6 +1590,9 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
     if bm is not None:
         query.append('AND map_md5 = %s')
         params.append(bm)
+
+    if scope == 'best':
+        query.append('AND grade != "F"')
 
     sort = 'pp' if scope == 'best' else 'play_time'
 
@@ -2077,7 +2121,7 @@ async def get_screenshot(conn: Connection) -> Optional[bytes]:
 @domain.route(re.compile(r'^/d/\d{1,10}$'))
 async def get_osz(conn: Connection) -> Optional[bytes]:
     """Handle a map download request (osu.ppy.sh/d/*)."""
-    mirror_url = f'{glob.config.mirror}/d/{conn.path[3:]}'
+    mirror_url = f'https://storage.ainu.pw/d/{conn.path[3:]}'
     conn.add_resp_header(f'Location: {mirror_url}')
     return (301, b'')
 

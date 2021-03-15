@@ -4,6 +4,7 @@ import asyncio
 import math
 import struct
 from pathlib import Path
+import orjson
 
 import aiohttp
 from cmyui import Ansi
@@ -93,34 +94,32 @@ class PPCalculator:
                 if self.mode_vn == 1:
                     cmd.append('-otaiko')
 
-            cmd.append('-obinary')
-
             # run the oppai-ng binary & read stdout.
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout = asyncio.subprocess.PIPE
             )
             stdout, _ = await proc.communicate() # stderr not needed
 
-            if stdout[:8] != b'binoppai':
-                # invalid output from oppai-ng
-                log(f'oppai-ng err: {stdout}', Ansi.LRED)
-                return (0.0, 0.0)
+            # XXX: could probably use binary to save a bit
+            # of time.. but in reality i should just write
+            # some bindings lmao this is so cursed overall
+            cmd.append('-ojson')
 
-            err_code = struct.unpack('<i', stdout[11:15])[0]
+            # join & run the command
+            pipe = asyncio.subprocess.PIPE
 
-            if err_code < 0:
-                log(f'oppai-ng: err code {err_code}.', Ansi.LRED)
-                return (0.0, 0.0)
+            proc = await asyncio.create_subprocess_shell(
+                ' '.join(cmd), stdout=pipe, stderr=pipe
+            )
 
-            pp = struct.unpack('<f', stdout[-4:])[0]
+            stdout, _ = await proc.communicate() # stderr not needed
+            output = orjson.loads(stdout.decode())
 
-            if math.isinf(pp):
-                log(f'oppai-ng: broken map: {self.file} (inf pp).', Ansi.LYELLOW)
-                return (0.0, 0.0)
+            if 'code' not in output or output['code'] != 200:
+                log(f"oppai-ng: {output['errstr']}", Ansi.LRED)
 
-            sr = struct.unpack('<f', stdout[-32:-28])[0]
-
-            return (pp, sr)
+            await proc.wait() # wait for exit
+            return output['pp'], output['stars']
         elif self.mode_vn == 2:
             # TODO: ctb support
             return (0.0, 0.0)

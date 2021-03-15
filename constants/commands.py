@@ -9,8 +9,8 @@ import re
 import time
 import signal
 import uuid
+import datetime
 from collections import Counter
-from datetime import datetime
 from importlib.metadata import version as pkg_version
 from time import perf_counter_ns as clock_ns
 from typing import Callable
@@ -22,7 +22,10 @@ from typing import Union
 from pathlib import Path
 
 import cmyui
+from cmyui.discord import Webhook
+from cmyui.discord import Embed
 import psutil
+
 
 import packets
 from constants import regexes
@@ -429,12 +432,23 @@ async def _map(ctx: Context) -> str:
     # for updating cache would be faster?
     # surely this will not scale as well..
 
+    webhook_url = glob.config.webhooks['audit-log']
+    webhook = Webhook(url=webhook_url)
+
     if ctx.args[1] == 'set':
         # update whole set
         await glob.db.execute(
             'UPDATE maps SET status = %s, '
             'frozen = 1 WHERE set_id = %s',
             [new_status, bmap.set_id]
+        )
+
+        requester = await glob.db.fetch(
+            'SELECT users.name, map_requests.player_id '
+            'FROM map_requests LEFT JOIN users '
+            'ON users.id = map_requests.player_id '
+            'WHERE map_id = %s',
+            [bmap.id]
         )
 
         # select all map ids for clearing map requests.
@@ -449,6 +463,58 @@ async def _map(ctx: Context) -> str:
             if cached['map'].set_id == bmap.set_id:
                 cached['map'].status = new_status
 
+        if new_status > 0:
+            embed = Embed(
+                title = f'[{repr(bmap.mode)[3:].upper()}] Set Has Updated To {new_status!s} Status!',
+                color=0xbb0ebe,
+                timestamp = datetime.datetime.utcnow()
+            )
+
+            if requester is not None:
+                embed.set_footer(
+                    text = f'Requested by: {requester["name"]}',
+                    url = f'https://sakuru.pw/u/{requester["player_id"]}',
+                    icon_url = f'https://a.sakuru.pw/{requester["player_id"]}'
+                )
+            else:
+                embed.set_footer(
+                    text = f'{ctx.player.name}',
+                    icon_url = f'https://a.sakuru.pw/{ctx.player.id}'
+                )
+
+            embed.set_author(
+                url = f'https://sakuru.pw/direct?id={bmap.set_id}',
+                name = f'{bmap.artist} - {bmap.title}',
+                icon_url = 'https://sakuru.pw/static/ingame.png'
+            )
+
+            length = str(datetime.timedelta(seconds = bmap.total_length))
+
+            if bmap.total_length < 3600:
+                length = length[2:]
+
+            embed.add_field(
+                name = '**Stats**',
+                value = f'**BPM**: {bmap.bpm:.2f}\n**Length**: {length}\nThat set has **{len(map_ids)}** diffs.',
+                inline = True
+            )
+            
+            embed.add_field(
+                name = '**Download**',
+                value = f'[HentaiNinja](http://hentai.ninja/d/{bmap.set_id})\n[Bancho Listing](https://osu.ppy.sh/beatmapsets/{bmap.set_id})\n[osu!Direct](https://sakuru.pw/direct?id={bmap.set_id})',
+                inline = True
+            )
+
+            embed.add_field(
+                name = '**Nominator**',
+                value = f'[{ctx.player.name}]({ctx.player.url})',
+                inline = True
+            )
+
+            embed.set_image(url=f'https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/cover.jpg')
+            webhook.add_embed(embed)
+            await webhook.post(glob.http)
+
     else:
         # update only map
         await glob.db.execute(
@@ -457,6 +523,14 @@ async def _map(ctx: Context) -> str:
             [new_status, bmap.id]
         )
 
+        requester = await glob.db.fetch(
+            'SELECT users.name, map_requests.player_id '
+            'FROM map_requests LEFT JOIN users '
+            'ON users.id = map_requests.player_id '
+            'WHERE map_id = %s',
+            [bmap.id]
+        ) 
+
         map_ids = [bmap.id]
 
         for cached in glob.cache['beatmap'].values():
@@ -464,6 +538,58 @@ async def _map(ctx: Context) -> str:
             if cached['map'] is bmap:
                 cached['map'].status = new_status
                 break
+        
+        if new_status > 0:
+            embed = Embed(
+                title = f'[{repr(bmap.mode)[3:].upper()}] Map Has Updated To {new_status!s} Status!',
+                color=0xbb0ebe,
+                timestamp = datetime.datetime.utcnow()
+            )
+
+            if requester is not None:
+                embed.set_footer(
+                    text = f'Requested by: {requester["name"]}',
+                    url = f'https://sakuru.pw/u/{requester["player_id"]}',
+                    icon_url = f'https://a.sakuru.pw/{requester["player_id"]}'
+                )
+            else:
+                embed.set_footer(
+                    text = f'{ctx.player.name}',
+                    icon_url = f'https://a.sakuru.pw/{ctx.player.id}'
+                )
+
+            embed.set_author(
+                url = f'https://sakuru.pw/direct?id={bmap.set_id}',
+                name = f'{bmap.artist} - {bmap.title} [{bmap.version}]',
+                icon_url = 'https://sakuru.pw/static/ingame.png'
+            )
+
+            length = str(datetime.timedelta(seconds = bmap.total_length))
+
+            if bmap.total_length < 3600:
+                length = length[2:]
+
+            embed.add_field(
+                name = '**Stats**',
+                value = f'**BPM**: {bmap.bpm:.2f}\n**Length**: {length}\n**SR**: {bmap.diff:.2f}',
+                inline = True
+            )
+            
+            embed.add_field(
+                name = '**Download**',
+                value = f'[HentaiNinja](http://hentai.ninja/d/{bmap.set_id})\n[Bancho Listing](https://osu.ppy.sh/beatmapsets/{bmap.set_id})\n[osu!Direct](https://sakuru.pw/direct?id={bmap.set_id})',
+                inline = True
+            )
+
+            embed.add_field(
+                name = '**Nominator**',
+                value = f'[{ctx.player.name}]({ctx.player.url})',
+                inline = True
+            )
+
+            embed.set_image(url=f'https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/cover.jpg')
+            webhook.add_embed(embed)
+            await webhook.post(glob.http)
 
     # deactivate rank requests for all ids
     for map_id in map_ids:
@@ -1879,7 +2005,7 @@ async def clan_create(ctx: Context) -> str:
     if glob.clans.get(tag=tag):
         return 'That tag has already been claimed by another clan.'
 
-    created_at = datetime.now()
+    created_at = datetime.datetime.now()
 
     # add clan to sql (generates id)
     id = await glob.db.execute(
