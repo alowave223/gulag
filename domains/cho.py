@@ -14,6 +14,7 @@ from cmyui import AnsiRGB
 from cmyui import Connection
 from cmyui import Domain
 from cmyui import log
+from cmyui.discord import Webhook
 
 import packets
 from constants import commands
@@ -78,7 +79,7 @@ async def bancho_handler(conn: Connection) -> bytes:
                 conn.body, conn.headers['X-Real-IP']
             )
 
-        conn.add_resp_header(f'cho-token: {token}')
+        conn.resp_headers['cho-token'] = token
         return resp
 
     # get the player from the specified osu token.
@@ -107,12 +108,12 @@ async def bancho_handler(conn: Connection) -> bytes:
         await packet.handle(player)
         packets_read.append(packet.type)
 
-    if glob.config.debug:
+    if glob.app.debug:
         packets_str = ', '.join([p.name for p in packets_read]) or 'None'
         log(f'[BANCHO] {player} | {packets_str}.', AnsiRGB(0xff68ab))
 
     player.last_recv_time = time.time()
-    conn.add_resp_header('Content-Type: text/html; charset=UTF-8')
+    conn.resp_headers['Content-Type'] = 'text/html; charset=UTF-8'
     return player.dequeue() or b''
 
 """ Packet logic """
@@ -267,8 +268,8 @@ class SendMessage(BanchoPacket, type=Packets.OSU_SEND_PUBLIC_MESSAGE):
                             'osu!mania': 3
                         }[match['mode_vn']]
                     else:
-                        # use beatmap mode if not specified
-                        mode_vn = bmap.mode.as_vanilla
+                        # use player mode if not specified
+                        mode_vn = p.status.mode.as_vanilla
 
                     p.last_np = {
                         'bmap': bmap,
@@ -371,7 +372,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     # than two months old, forcing an update re-check.
     # NOTE: this is disabled on debug since older clients
     #       can sometimes be quite useful when testing.
-    if not glob.config.debug:
+    if not glob.app.debug:
         if osu_ver < (dt.now() - td(60)):
             return (packets.versionUpdateForced() +
                     packets.userID(-2)), 'no'
@@ -504,8 +505,27 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         else:
             # player is verified
             # TODO: discord webhook?
-            log(f'{username} logged in with HWID matches!', Ansi.LRED)
-            pass
+            # TODO: staff hwid locking & bypass detections.
+            unique_players = set()
+            total_occurrences = 0
+            for match in hwid_matches:
+                if match['name'] not in unique_players:
+                    unique_players.add(match['name'])
+                total_occurrences += match['occurrences']
+
+            msg_content = (
+                f'{username} logged in with HWID matches '
+                f'from {len(unique_players)} other users. '
+                f'({total_occurrences} total occurrences)'
+            )
+
+            if webhook_url := glob.config.webhooks['surveillance']:
+                # TODO: make it look nicer lol.. very basic
+                webhook = Webhook(url=webhook_url)
+                webhook.content = msg_content
+                await webhook.post(glob.http)
+
+            log(msg_content, Ansi.LRED)
 
     # get clan & clan rank if we're in a clan
     if user_info['clan_id'] != 0:
@@ -800,8 +820,8 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
                                 'osu!mania': 3
                             }[match['mode_vn']]
                         else:
-                            # use beatmap mode if not specified
-                            mode_vn = bmap.mode.as_vanilla
+                            # use player mode if not specified
+                            mode_vn = p.status.mode.as_vanilla
 
                         p.last_np = {
                             'bmap': bmap,
@@ -853,7 +873,7 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
                     p.send(msg, sender=t)
 
         else:
-            # target is not aika, send the message normally if online
+            # target is not bot, send the message normally if online
             if t.online:
                 t.send(msg, sender=p)
             else:
@@ -1406,11 +1426,9 @@ class FriendAdd(BanchoPacket, type=Packets.OSU_FRIEND_ADD):
             log(f'{p} tried to add a user who is not online! ({self.user_id})')
             return
 
-        if t.id in (1, p.id):
-            # trying to add the bot, or themselves.
-            # these are already appended to the friends list
-            # on login, so disallow the user from *actually*
-            # editing these in sql.
+        if t.id == 1:
+            # you cannot add the bot as a friend since it's already
+            # your friend :]
             return
 
         await p.update_latest_activity()
@@ -1425,11 +1443,9 @@ class FriendRemove(BanchoPacket, type=Packets.OSU_FRIEND_REMOVE):
             log(f'{p} tried to remove a user who is not online! ({self.user_id})')
             return
 
-        if t.id in (1, p.id):
-            # trying to remove the bot, or themselves.
-            # these are already appended to the friends list
-            # on login, so disallow the user from *actually*
-            # editing these in sql.
+        if t.id == 1:
+            # you cannot remove the bot as a friend because it wont
+            # like that >:[
             return
 
         await p.update_latest_activity()

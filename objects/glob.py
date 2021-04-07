@@ -1,17 +1,27 @@
 # -*- coding: utf-8 -*-
 
-import config # imported for indirect use
+# note that this is not used directly in this
+# module, but it frequently used through the
+# `glob.config.attr` syntax outside of here.
+import config  # NOQA
 
+# this file contains no actualy definitions
 if __import__('typing').TYPE_CHECKING:
     from asyncio import Queue
-    from aiohttp.client import ClientSession
-    from cmyui import AsyncSQLPool
-    from cmyui import Version
-    from datadog import ThreadStats
     from typing import Optional
 
+    from aiohttp.client import ClientSession
+    from cmyui import AsyncSQLPool
+    from cmyui import Server
+    from cmyui import Version
+    from datadog import ThreadStats
+
     from objects.achievement import Achievement
-    from objects.collections import *
+    from objects.collections import PlayerList
+    from objects.collections import ChannelList
+    from objects.collections import MatchList
+    from objects.collections import ClanList
+    from objects.collections import MapPoolList
     from objects.player import Player
     from objects.score import Score
     from packets import BanchoPacket
@@ -26,6 +36,9 @@ __all__ = (
     'datadog', 'sketchy_queue',
     'oppai_built', 'cache'
 )
+
+# server object
+app: 'Server'
 
 # current server state
 players: 'PlayerList'

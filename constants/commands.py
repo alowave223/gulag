@@ -4,10 +4,11 @@ import asyncio
 import copy
 import importlib
 import os
+import pprint
 import random
 import re
-import time
 import signal
+import time
 import uuid
 import datetime
 from collections import Counter
@@ -226,7 +227,7 @@ async def recent(ctx: Context) -> str:
 async def _with(ctx: Context) -> str:
     """Specify custom accuracy & mod combinations with `/np`."""
     if ctx.recipient is not glob.bot:
-        return 'This command can only be used in DM with Aika.'
+        return 'This command can only be used in DM with bot.'
 
     if time.time() >= ctx.player.last_np['timeout']:
         return 'Please /np a map first!'
@@ -835,7 +836,7 @@ async def shutdown(ctx: Context) -> str:
 
             glob.players.enqueue(packets.notification(alert_msg))
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.call_later(delay, os.kill, os.getpid(), _signal)
         return f'Enqueued {ctx.trigger}.'
     else: # shutdown immediately
@@ -877,7 +878,6 @@ async def fakeusers(ctx: Context) -> str:
             'utc_offset': 0,
             'osu_ver': 'dn',
             'pm_private': False,
-            'login_time': 0,
             'clan': None,
             'clan_priv': None,
             'priv': Privileges.Normal | Privileges.Verified,
@@ -1024,8 +1024,8 @@ async def recalc(ctx: Context) -> str:
 @command(Privileges.Dangerous, hidden=True)
 async def debug(ctx: Context) -> str:
     """Toggle the console's debug setting."""
-    glob.config.debug = not glob.config.debug
-    return f"Toggled {'on' if glob.config.debug else 'off'}."
+    glob.app.debug = not glob.app.debug
+    return f"Toggled {'on' if glob.app.debug else 'off'}."
 
 # TODO: this command is rly bad, it probably
 # shouldn't really be a command to begin with..
@@ -1187,34 +1187,30 @@ if glob.config.advanced:
         if not ctx.args:
             return 'owo'
 
-        # create the new coroutine definition as a string
-        # with the lines from our message (split by '\n').
-        lines = ' '.join(ctx.args).split(r'\n')
-        definition = '\n '.join(['async def __py(ctx):'] + lines)
+        # turn our input args into a coroutine definition string.
+        definition = '\n '.join([
+            'async def __py(ctx):',
+            ' '.join(ctx.args)
+        ])
 
         try: # def __py(ctx)
-            exec(definition, __py_namespace)
-
-            loop = asyncio.get_running_loop()
-
-            try: # __py(ctx)
-                task = loop.create_task(__py_namespace['__py'](ctx))
-                ret = await asyncio.wait_for(asyncio.shield(task), 5.0)
-            except asyncio.TimeoutError:
-                ret = 'Left running (took >=5 sec).'
-
-        except Exception as e:
-            # code was invalid, return
-            # the error in the osu! chat.
+            exec(definition, __py_namespace)  # add to namespace
+            ret = await __py_namespace['__py'](ctx) # await it's return
+        except Exception as e: # return exception in osu! chat
             ret = f'{e.__class__}: {e}'
 
         if '__py' in __py_namespace:
             del __py_namespace['__py']
 
-        if ret is not None:
-            return str(ret)
-        else:
+        if ret is None:
             return 'Success'
+
+        # TODO: perhaps size checks?
+
+        if not isinstance(ret, str):
+            ret = pprint.pformat(ret)
+
+        return ret
 
 """ Multiplayer commands
 # The commands below for multiplayer match management.
@@ -1255,7 +1251,7 @@ async def mp_start(ctx: Context) -> str:
                 if ctx.player in ctx.match:
                     ctx.match.start()
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             loop.call_later(duration, _start)
             return f'Match will start in {duration} seconds.'
         elif ctx.args[0] not in ('force', 'f'):
@@ -1877,7 +1873,7 @@ async def pool_add(ctx: Context) -> str:
         return f'{mods_slot} is already {pool.maps[(mods, slot)].embed}!'
 
     if bmap in pool.maps.values():
-        return f'Map is already in the pool!'
+        return 'Map is already in the pool!'
 
     # insert into db
     await glob.db.execute(

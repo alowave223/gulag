@@ -132,7 +132,7 @@ def get_login(name_p: str, pass_p: str, auth_error: bytes = b'') -> Callable:
 
 # TODO
 # POST /web/osu-error.php
-# POsT /web/osu-session.php
+# POST /web/osu-session.php
 # POST /web/osu-osz2-bmsubmit-post.php
 # POST /web/osu-osz2-bmsubmit-upload.php
 # GET /web/osu-osz2-bmsubmit-getid.php
@@ -143,7 +143,7 @@ def get_login(name_p: str, pass_p: str, auth_error: bytes = b'') -> Callable:
 @get_login(name_p='u', pass_p='p')
 async def osuScreenshot(p: 'Player', conn: Connection) -> Optional[bytes]:
     if 'ss' not in conn.files:
-        log(f'screenshot req missing file.', Ansi.LRED)
+        log('Screenshot req missing file.', Ansi.LRED)
         return (400, b'Missing file.')
 
     ss_file = conn.files['ss']
@@ -315,8 +315,8 @@ async def lastFM(p: 'Player', conn: Connection) -> Optional[bytes]:
         if random.randrange(32) == 0:
             # Random chance (1/32) for a ban.
             await p.restrict(
-                admin=glob.bot,
-                reason=f'hq!osu relife 1/32'
+                admin = glob.bot,
+                reason = 'hq!osu relife 1/32'
             )
             return b'-3'
 
@@ -351,8 +351,8 @@ USING_CHIMU = 'chimu.moe' in glob.config.mirror
 DIRECT_SET_INFO_FMTSTR = (
     '{{{setid_spelling}}}.osz|{{Artist}}|{{Title}}|{{Creator}}|'
     '{{RankedStatus}}|10.0|{{LastUpdate}}|{{{setid_spelling}}}|'
-    '0|0|0|0|0|{{diffs}}'# 0s are threadid, has_vid, has_story,
-                         #        filesize, filesize_novid.
+    '0|{{HasVideo}}|0|0|0|{{diffs}}' # 0s are threadid, has_story,
+                                     # filesize, filesize_novid.
 ).format(setid_spelling='SetId' if USING_CHIMU else 'SetID')
 
 DIRECT_MAP_INFO_FMTSTR = (
@@ -422,6 +422,12 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
         if bmap['ChildrenBeatmaps'] is None:
             continue
 
+        if USING_CHIMU:
+            bmap['HasVideo'] = int(bmap['HasVideo'])
+        else:
+            # cheesegull doesn't support vids
+            bmap['HasVideo'] = '0'
+
         diff_sorted_maps = sorted(bmap['ChildrenBeatmaps'], key = diff_rating)
         diffs_str = ','.join([DIRECT_MAP_INFO_FMTSTR.format(**row)
                               for row in diff_sorted_maps])
@@ -430,6 +436,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
 
     return '\n'.join(ret).encode()
 
+# TODO: video support (needs db change)
 @domain.route('/web/osu-search-set.php')
 @required_args({'u', 'h'})
 @get_login(name_p='u', pass_p='h')
@@ -563,9 +570,18 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         pp_cap = glob.config.autoban_pp[s.mode][s.mods & Mods.FLASHLIGHT != 0]
 
         if s.pp > pp_cap:
-            log(f'{s.player} banned for submitting '
-                f'{s.pp:.2f} score on gm {s.mode!r}.',
-                Ansi.LRED)
+            msg_content = (
+                f'{s.player} banned for submitting '
+                f'{s.pp:.2f}pp score on gm {s.mode!r}.',
+            )
+
+            if webhook_url := glob.config.webhooks['audit-log']:
+                # TODO: make it look nicer lol.. very basic
+                webhook = Webhook(url=webhook_url)
+                webhook.content = msg_content
+                await webhook.post(glob.http)
+
+            log(msg_content, Ansi.LRED)
 
             await s.player.restrict(
                 admin=glob.bot,
@@ -636,11 +652,11 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         '%s, %s, %s, %s, %s, %s, '
         '%s, %s, %s, %s, %s, %s, '
         '%s, %s, %s, %s, '
-        '%s, %s, %s, %s)', [
+        '%s, %s, %s, %s, %s)', [
             s.bmap.md5, s.score, s.pp, s.acc, s.max_combo, s.mods,
             s.n300, s.n100, s.n50, s.nmiss, s.ngeki, s.nkatu,
             s.grade, s.status, s.mode.as_vanilla, s.play_time,
-            s.time_elapsed, s.client_flags, s.player.id, s.perfect
+            s.time_elapsed, s.client_flags, s.player.id, s.perfect, 0
         ]
     )
 
@@ -655,8 +671,8 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         if replay_missing and not s.player.restricted:
             log(f'{s.player} submitted a score without a replay!', Ansi.LRED)
             await s.player.restrict(
-                admin=glob.bot,
-                reason=f'submitted score with no replay'
+                admin = glob.bot,
+                reason = 'submitted score with no replay'
             )
         else:
             # TODO: the replay is currently sent from the osu!
@@ -872,7 +888,8 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         webhook.add_embed(embed)
         await webhook.post(glob.http)
 
-    log(f'[{s.mode!r}] {s.player} submitted a score! ({s.status!r})', Ansi.LGREEN)
+    log(f'[{s.mode!r}] {s.player} submitted a score! '
+        f'({s.status!r}, {s.pp:,.2f}pp / {stats.pp:,}pp)', Ansi.LGREEN)
     return ret
 
 
@@ -973,7 +990,9 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         return b'-1|false'
 
     mods = Mods(int(conn.args['mods']))
-    mode = GameMode.from_params(int(conn.args['m']), mods)
+    mode_vn = int(conn.args['m'])
+
+    mode = GameMode.from_params(mode_vn, mods)
 
     map_set_id = int(conn.args['i'])
     rank_type = RankingType(int(conn.args['v']))
@@ -1017,8 +1036,9 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
                 # search for a match in our db - since we just cached all
                 # versions of the map, a match will mean that the map is
                 # simply out of date, while no match should mean unsubmitted.
-                map_filename = conn.args['f'].replace('+', ' ')
-                if not (re := regexes.mapfile.match(unquote(map_filename))):
+                map_filename = unquote(conn.args['f'].replace('+', ' '))
+
+                if not (re := regexes.mapfile.match(map_filename)):
                     # if a mapfile has invalid syntax, it's almost certainly
                     # some cursed abomination made by the user themself..
                     # NOTE: logging because i'm not sure if im a liar B)
@@ -1075,7 +1095,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         "AND (u.priv & 1 OR u.id = %s) AND mode = %s"
     ]
 
-    params = [map_md5, p.id, conn.args['m']]
+    params = [map_md5, p.id, mode_vn]
 
     if rank_type == RankingType.Mods:
         query.append('AND s.mods = %s')
@@ -1088,7 +1108,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         query.append('AND u.country = %s')
         params.append(p.country[1])  # letters, not id
 
-    query.append(f'ORDER BY _score DESC LIMIT 50')
+    query.append('ORDER BY _score DESC LIMIT 50')
 
     scores = await glob.db.fetchall(' '.join(query), params)
 
@@ -1128,7 +1148,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         'WHERE map_md5 = %s AND mode = %s '
         'AND userid = %s AND status = 2 '
         'ORDER BY _score DESC LIMIT 1', [
-            map_md5, conn.args['m'], p.id
+            map_md5, mode_vn, p.id
         ]
     )
 
@@ -1144,7 +1164,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
             'WHERE s.map_md5 = %s AND s.mode = %s '
             'AND s.status = 2 AND u.priv & 1 '
             f'AND s.{scoring} > %s', [
-                map_md5, conn.args['m'],
+                map_md5, mode_vn,
                 p_best['_score']
             ]
         ))['count']
@@ -1349,11 +1369,14 @@ async def checkUpdates(conn: Connection) -> Optional[bytes]:
 # GET /api/get_match: return information for a given multiplayer match.
 # GET /api/calculate_pp: calculate & return pp for a given beatmap.
 
-# Authorized (requires valid api key)
-# NOTE: api key should be passed as 'Authorization' http header.
+# Authorized (requires valid api key, passed as 'Authorization' header)
+# NOTE: authenticated handlers may have privilege requirements.
+
+# [Normal]
+# GET /api/calculate_pp: calculate & return pp for a given beatmap.
 # POST/PUT /api/set_avatar: Update the tokenholder's avatar to a given file.
 
-# TODO: authenticated api handlers
+# TODO handlers
 # GET /api/get_friends: return a list of the player's friends.
 # POST/PUT /api/set_player_info: update user information (updates whatever received).
 
@@ -1461,7 +1484,6 @@ async def api_get_player_status(conn: Connection) -> Optional[bytes]:
         # no such player online
         return JSON({'online': False})
 
-    # varkaria wants set_id for gulag-web
     if p.status.map_md5:
         bmap = await Beatmap.from_md5(p.status.map_md5)
     else:
@@ -1547,10 +1569,10 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
 
         if mods_arg.isdecimal():
             # parse from int form
-            mods = Mods(int(conn.args['mods']))
+            mods = Mods(int(mods_arg))
         else:
             # parse from string form
-            mods = Mods.from_modstr(conn.args['mods'])
+            mods = Mods.from_modstr(mods_arg)
     else:
         mods = None
 
@@ -1772,10 +1794,10 @@ async def api_get_map_scores(conn: Connection) -> Optional[bytes]:
 
         if mods_arg.isdecimal():
             # parse from int form
-            mods = Mods(int(conn.args['mods']))
+            mods = Mods(int(mods_arg))
         else:
             # parse from string form
-            mods = Mods.from_modstr(conn.args['mods'])
+            mods = Mods.from_modstr(mods_arg)
     else:
         mods = None
 
@@ -1947,9 +1969,9 @@ async def api_get_replay(conn: Connection) -> Optional[bytes]:
     # can't submit scores so should not be a problem.
 
     # send data back to the client
-    conn.add_resp_header('Content-Type: application/octet-stream')
-    conn.add_resp_header('Content-Description: File Transfer')
-    conn.add_resp_header(f'Content-Disposition: attachment; filename="{score_id}.osr"')
+    conn.resp_headers['Content-Type'] = 'application/octet-stream'
+    conn.resp_headers['Content-Description'] = 'File Transfer'
+    conn.resp_headers['Content-Disposition'] = f'attachment; filename="{score_id}.osr"'
 
     return bytes(buf)
 
@@ -1997,6 +2019,19 @@ async def api_get_match(conn: Connection) -> Optional[bytes]:
             } for idx, slot in enumerate(match.slots) if slot.player
         }
     })
+
+@domain.route('/api/get_player_bydiscord')
+async def get_player_bydiscord(conn: Connection) -> Optional[object]:
+    if conn.args not in ('id', 'secret'):
+        return 'lol'
+
+    if conn.args['secret'] != 'NpNzbuYZpDbmh5aKpjlD58WNffQB8qWe':
+        return 'lol'
+
+    res = await glob.db.fetch('SELECT * FROM discrod WHERE discord_id = %s', [conn.args['id']])
+    print(res)
+
+    return JSON(res)
 
 def requires_api_key(f: Callable) -> Callable:
     @wraps(f)
@@ -2117,12 +2152,20 @@ async def get_screenshot(conn: Connection) -> Optional[bytes]:
 
     return path.read_bytes()
 
-
-@domain.route(re.compile(r'^/d/\d{1,10}$'))
+@domain.route(re.compile(r'^/d/\d{1,10}n?$'))
 async def get_osz(conn: Connection) -> Optional[bytes]:
     """Handle a map download request (osu.ppy.sh/d/*)."""
-    mirror_url = f'https://storage.ainu.pw/d/{conn.path[3:]}'
-    conn.add_resp_header(f'Location: {mirror_url}')
+    set_id = conn.path[3:]
+
+    if no_video := set_id[-1] == 'n':
+        set_id = set_id[:-1]
+
+    if USING_CHIMU:
+        query_str = f'download/{set_id}?n={int(no_video)}'
+    else:
+        query_str = f'd/{set_id}'
+
+    conn.resp_headers['Location'] = f'{glob.config.mirror}/{query_str}'
     return (301, b'')
 
 @domain.route(re.compile(r'^/web/maps/'))
@@ -2157,6 +2200,7 @@ async def get_updated_beatmap(conn: Connection) -> Optional[bytes]:
 
             content = await resp.read()
 
+        # save it to disk for future
         path.write_bytes(content)
 
     return content

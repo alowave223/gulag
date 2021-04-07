@@ -123,6 +123,12 @@ class Player:
         The current osu! chat menu options available to the player.
         XXX: These may eventually have a timeout.
 
+    bot_client: `bool`
+        Whether this is a bot account.
+
+    tourney_client: `bool`
+        Whether this is a management/spectator tourney client.
+
     _queue: `bytearray`
         Bytes enqueued to the player which will be transmitted
         at the tail end of their next connection to the server.
@@ -138,8 +144,11 @@ class Player:
         'utc_offset', 'pm_private',
         'away_msg', 'silence_end', 'in_lobby', 'osu_ver',
         'pres_filter', 'login_time', 'last_recv_time',
-        'menu_options', 'tourney_client', 'api_key',
-        '_queue', '__dict__'
+        'menu_options',
+
+        'bot_client', 'tourney_client',
+        'api_key', '_queue',
+        '__dict__'
     )
 
     def __init__(self, id: int, name: str,
@@ -209,6 +218,13 @@ class Player:
 
         # {id: {'callback', func, 'timeout': unixt, 'reusable': False}, ...}
         self.menu_options: dict[int, dict[str, Any]] = {}
+
+        # subject to possible change in the future,
+        # although if anything, bot accounts will
+        # probably just use the /api/ routes?
+        self.bot_client = extras.get('bot_client', False)
+        if self.bot_client:
+            self.enqueue = lambda data: None
 
         self.tourney_client = extras.get('tourney_client', False)
 
@@ -551,7 +567,7 @@ class Player:
     def leave_match(self) -> None:
         """Attempt to remove `self` from their match."""
         if not self.match:
-            if glob.config.debug:
+            if glob.app.debug:
                 log(f"{self} tried leaving a match they're not in?", Ansi.LYELLOW)
             return
 
@@ -625,7 +641,7 @@ class Player:
         for p in (c.players if c.instance else glob.players):
             p.enqueue(packets.channelInfo(*c.basic_info))
 
-        if glob.config.debug:
+        if glob.app.debug:
             log(f'{self} joined {c}.')
 
         return True
@@ -649,7 +665,7 @@ class Player:
         for p in recipients:
             p.enqueue(packets.channelInfo(*c.basic_info))
 
-        if glob.config.debug:
+        if glob.app.debug:
             log(f'{self} left {c}.')
 
     def add_spectator(self, p: 'Player') -> None:
@@ -801,8 +817,14 @@ class Player:
         # increment playcount
         stats.plays += 1
 
-        # calculate avg acc based on top 50 scores
-        stats.acc = sum([row['acc'] for row in res[:50]]) / min(50, len(res))
+        # calculate avg acc based on top 100 scores
+        tot = div = 0
+        for i, row in enumerate(res):
+            add = int((0.95 ** i) * 100)
+            tot += row['acc'] * add
+            div += add
+
+        stats.acc = tot / div
 
         # calculate weighted pp based on top 100 scores
         stats.pp = round(sum([row['pp'] * 0.95 ** i
@@ -853,8 +875,8 @@ class Player:
             'SELECT user2 FROM friendships WHERE user1 = %s', [self.id]
         )}
 
-        # always have self & bot added to friends.
-        self.friends = _friends | {1, self.id}
+        # always have bot added to friends.
+        self.friends = _friends | {1}
 
     async def achievements_from_sql(self) -> None:
         """Retrieve `self`'s achievements from sql."""

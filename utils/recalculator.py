@@ -9,8 +9,7 @@ import orjson
 import aiohttp
 from cmyui import Ansi
 from cmyui import log
-
-from constants.mods import Mods
+from maniera.calculator import Maniera
 
 __all__ = ('PPCalculator',)
 
@@ -78,7 +77,7 @@ class PPCalculator:
 
             # for now, we'll generate a bash command and
             # use subprocess to do the calculations (yikes).
-            cmd = [f'oppai-ng/oppai', self.file]
+            cmd = ['oppai-ng/oppai', self.file]
 
             if 'mods' in self.pp_attrs:
                 cmd.append(f'+{self.pp_attrs["mods"]!r}')
@@ -124,7 +123,6 @@ class PPCalculator:
             # TODO: ctb support
             return (0.0, 0.0)
         elif self.mode_vn == 3: # use maniera for mania
-            from maniera.calculator import Maniera
             if 'score' not in self.pp_attrs:
                 log('Err: pp calculator needs score for mania.', Ansi.LRED)
                 return (0.0, 0.0)
