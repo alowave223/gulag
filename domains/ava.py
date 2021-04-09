@@ -11,11 +11,12 @@ from objects import glob
 
 """ ava: avatar server (for both ingame & external) """
 
-domain = Domain('a.sakuru.pw')
+domain = Domain('a.dev.lol')
 
 AVATARS_PATH = Path.cwd() / '.data/avatars'
 DEFAULT_AVATAR = AVATARS_PATH / 'default.jpg'
 DEFAULT_BACKGROUND = AVATARS_PATH / 'defaultbg.jpg'
+BDEFAULT_BACKGROUND = AVATARS_PATH / 'bdefaultbg.png'
 @domain.route(re.compile(r'^/(?:-|--)?|(?:\d{1,10}(?:\.(?:jpg|jpeg|png))?|favicon\.ico)?$'))
 async def get_avatar(conn: Connection) -> Optional[bytes]:
     filename = conn.path[1:]
@@ -26,6 +27,8 @@ async def get_avatar(conn: Connection) -> Optional[bytes]:
         if not path.exists():
             if '--' in conn.path:
                 path = DEFAULT_BACKGROUND
+            elif 'b' in conn.path:
+                path = BDEFAULT_BACKGROUND
             else:
                 # no file exists
                 path = DEFAULT_AVATAR
@@ -38,6 +41,8 @@ async def get_avatar(conn: Connection) -> Optional[bytes]:
         else:
             if '--' in conn.path:
                 path = DEFAULT_BACKGROUND
+            elif 'b' in conn.path:
+                path = BDEFAULT_BACKGROUND
             else:
                 # no file exists
                 path = DEFAULT_AVATAR

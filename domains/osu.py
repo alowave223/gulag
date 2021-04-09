@@ -18,6 +18,7 @@ from typing import Optional
 from typing import TYPE_CHECKING
 from urllib.parse import unquote
 from utils.recalculator import PPCalculator
+from circleparse import parse_replay_file
 
 import bcrypt
 import orjson
@@ -896,6 +897,12 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
     return ret
 
 
+SCOREID_BORDERS = tuple(
+    (((1 << 63) - 1) // 3) * i
+    for i in range(1, 4)
+)
+
+
 @domain.route('/web/osu-getreplay.php')
 @required_args({'u', 'h', 'm', 'c'})
 @get_login(name_p='u', pass_p='h')
@@ -912,7 +919,27 @@ async def getReplay(p: 'Player', conn: Connection) -> Optional[bytes]:
 
     # osu! expects empty resp for no replay
     if replay_file.exists():
-        return replay_file.read_bytes()
+        file_bytes = replay_file.read_bytes()
+
+        if SCOREID_BORDERS[0] > score_id >= 1:
+            scores_table = 'scores_vn'
+        elif SCOREID_BORDERS[1] > score_id >= SCOREID_BORDERS[0]:
+            scores_table = 'scores_rx'
+        elif SCOREID_BORDERS[2] > score_id >= SCOREID_BORDERS[1]:
+            scores_table = 'scores_ap'
+        else:
+            return
+
+        userid = await glob.db.fetch(f'SELECT userid FROM {scores_table} WHERE id = {score_id}')
+        
+        if p.id != userid.get('userid'):
+            await glob.db.execute(f'UPDATE {scores_table} SET watched = watched + 1 WHERE id = {score_id}')
+
+        if len(str(struct.unpack('<i', file_bytes[1:5])[0])) == 8:
+            parsed = parse_replay_file(replay_file)
+            return parsed.lzma_string
+        else:
+            return file_bytes
 
 
 @domain.route('/web/osu-rate.php')
@@ -1387,10 +1414,6 @@ async def checkUpdates(conn: Connection) -> Optional[bytes]:
 
 JSON = orjson.dumps
 DATETIME_OFFSET = 0x89F7FF5F7B58000
-SCOREID_BORDERS = tuple(
-    (((1 << 63) - 1) // 3) * i
-    for i in range(1, 4)
-)
 
 @domain.route('/api/get_player_count')
 async def api_get_player_count(conn: Connection) -> Optional[bytes]:
@@ -1458,9 +1481,24 @@ async def api_get_player_info(conn: Connection) -> Optional[bytes]:
     if conn.args['scope'] in ('stats', 'all'): # user stats
         # get all regular stats
         res = await glob.db.fetch(
-            'SELECT * FROM stats '
-            'WHERE id = %s', [pid]
+            'SELECT stats.*, users.country FROM stats '
+            'INNER JOIN users ON users.id = stats.id '
+            'WHERE stats.id = %s', [pid]
         )
+
+        for mods in ('vn', 'rx', 'ap'):
+            for mode in ('std', 'taiko', 'catch', 'mania'):
+                firstplaces = await glob.db.fetch(f'SELECT COUNT(scores_{mods}.id) AS firstplaces FROM scores_{mods} WHERE NOT EXISTS (SELECT 1 FROM scores_{mods} AS leaderboard WHERE leaderboard.score > scores_{mods}.score AND leaderboard.map_md5 = scores_{mods}.map_md5 AND leaderboard.status = 2) AND scores_{mods}.status = 2 AND scores_{mods}.userid = {pid};')
+                watched = await glob.db.fetch(f'SELECT CAST(SUM(scores_{mods}.watched) AS UNSIGNED) AS watched FROM scores_{mods} WHERE userid = {pid}')
+                res.update({f"firstplaces_{mods}_{mode}":firstplaces.get('firstplaces')})
+                res.update({f"watched_{mods}_{mode}":watched.get('watched')})
+                pp = res.get(f'pp_{mods}_{mode}')
+                if pp is not None:
+                    rank = await glob.db.fetch(f'SELECT COUNT(*)+1 AS c FROM stats LEFT JOIN users USING(id) WHERE stats.pp_{mods}_{mode} > {pp} AND users.priv & 1')
+                    res.update({f"rank_{mods}_{mode}":rank['c']})
+
+                    crank = await glob.db.fetch(f'SELECT COUNT(*)+1 AS c FROM stats LEFT JOIN users USING(id) WHERE stats.pp_{mods}_{mode} > {pp} AND users.priv & 1 AND users.country = "{res["country"]}"')
+                    res.update({f"crank_{mods}_{mode}":crank['c']})
 
         if not res:
             return (404, b'Player not found')
@@ -1622,7 +1660,7 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
         params.append(bm)
 
     if scope == 'best':
-        query.append('AND grade != "F"')
+        query.append('AND grade != "F" AND status = 2')
 
     sort = 'pp' if scope == 'best' else 'play_time'
 
@@ -1914,79 +1952,113 @@ async def api_get_replay(conn: Connection) -> Optional[bytes]:
         'include_headers' in conn.args and
         conn.args['include_headers'].lower() == 'false'
     ):
-        return raw_replay
+        if len(str(struct.unpack('<i', raw_replay[1:5])[0])) == 8:
+            parsed = parse_replay_file(replay_file)
+            return parsed.lzma_string
+        else:
+            return raw_replay
 
-    # add replay headers from sql
-    # TODO: osu_version & life graph in scores tables?
-    res = await glob.db.fetch(
-        'SELECT u.name username, m.md5 map_md5, '
-        'm.artist, m.title, m.version, '
-        's.mode, s.n300, s.n100, s.n50, s.ngeki, '
-        's.nkatu, s.nmiss, s.score, s.max_combo, '
-        's.perfect, s.mods, s.play_time '
-        f'FROM {scores_table} s '
-        'INNER JOIN users u ON u.id = s.userid '
-        'INNER JOIN maps m ON m.md5 = s.map_md5 '
-        'WHERE s.id = %s',
-        [score_id]
-    )
+    if len(str(struct.unpack('<i', raw_replay[1:5])[0])) == 8:
+        # add replay headers from sql
+        res = await glob.db.fetch(
+            'SELECT u.name username, m.md5 map_md5, '
+            'm.artist, m.title, m.version, '
+            's.mode, s.n300, s.n100, s.n50, s.ngeki, '
+            's.nkatu, s.nmiss, s.score, s.max_combo, '
+            's.perfect, s.mods, s.play_time '
+            f'FROM {scores_table} s '
+            'INNER JOIN users u ON u.id = s.userid '
+            'INNER JOIN maps m ON m.md5 = s.map_md5 '
+            'WHERE s.id = %s',
+            [score_id]
+        )
 
-    if not res:
-        # score not found in sql
-        return (404, b'Score not found.') # but replay was? lol
+        if not res:
+            # score not found in sql
+            return (404, b'Score not found.') # but replay was? lol
 
-    # generate the replay's hash
-    replay_md5 = hashlib.md5(
-        '{}p{}o{}o{}t{}a{}r{}e{}y{}o{}u{}{}{}'.format(
-            res['n100'] + res['n300'], res['n50'],
+        # send data back to the client
+        conn.resp_headers['Content-Type'] = 'application/octet-stream'
+        conn.resp_headers['Content-Description'] = 'File Transfer'
+        conn.resp_headers['Content-Disposition'] = (
+            'attachment; filename="{username} - '
+            '{artist} - {title} [{version}] '
+            '({play_time:%Y-%m-%d}).osr"'
+        ).format(**res)
+
+        return replay_file.read_bytes()
+    else:
+        # add replay headers from sql
+        # TODO: osu_version & life graph in scores tables?
+        res = await glob.db.fetch(
+            'SELECT u.name username, m.md5 map_md5, '
+            'm.artist, m.title, m.version, '
+            's.mode, s.n300, s.n100, s.n50, s.ngeki, '
+            's.nkatu, s.nmiss, s.score, s.max_combo, '
+            's.perfect, s.mods, s.play_time '
+            f'FROM {scores_table} s '
+            'INNER JOIN users u ON u.id = s.userid '
+            'INNER JOIN maps m ON m.md5 = s.map_md5 '
+            'WHERE s.id = %s',
+            [score_id]
+        )
+
+        if not res:
+            # score not found in sql
+            return (404, b'Score not found.') # but replay was? lol
+
+        # generate the replay's hash
+        replay_md5 = hashlib.md5(
+            '{}p{}o{}o{}t{}a{}r{}e{}y{}o{}u{}{}{}'.format(
+                res['n100'] + res['n300'], res['n50'],
+                res['ngeki'], res['nkatu'], res['nmiss'],
+                res['map_md5'], res['max_combo'],
+                str(res['perfect'] == 1),
+                res['username'], res['score'], 0, # TODO: rank
+                res['mods'], 'True' # TODO: ??
+            ).encode()
+        ).hexdigest()
+
+        # create a buffer to construct the replay output
+        buf = bytearray()
+
+        # pack first section of headers.
+        buf += struct.pack('<Bi', res['mode'], 20200207) # TODO: osuver
+        buf += packets.write_string(res['map_md5'])
+        buf += packets.write_string(res['username'])
+        buf += packets.write_string(replay_md5)
+        buf += struct.pack(
+            '<hhhhhhihBi',
+            res['n300'], res['n100'], res['n50'],
             res['ngeki'], res['nkatu'], res['nmiss'],
-            res['map_md5'], res['max_combo'],
-            str(res['perfect'] == 1),
-            res['username'], res['score'], 0, # TODO: rank
-            res['mods'], 'True' # TODO: ??
-        ).encode()
-    ).hexdigest()
+            res['score'], res['max_combo'], res['perfect'],
+            res['mods']
+        )
+        buf += b'\x00' # TODO: hp graph
 
-    # create a buffer to construct the replay output
-    buf = bytearray()
+        timestamp = int(res['play_time'].timestamp() * 1e7)
+        buf += struct.pack('<q', timestamp + DATETIME_OFFSET)
 
-    # pack first section of headers.
-    buf += struct.pack('<Bi', res['mode'], 20200207) # TODO: osuver
-    buf += packets.write_string(res['map_md5'])
-    buf += packets.write_string(res['username'])
-    buf += packets.write_string(replay_md5)
-    buf += struct.pack(
-        '<hhhhhhihBi',
-        res['n300'], res['n100'], res['n50'],
-        res['ngeki'], res['nkatu'], res['nmiss'],
-        res['score'], res['max_combo'], res['perfect'],
-        res['mods']
-    )
-    buf += b'\x00' # TODO: hp graph
+        # pack the raw replay data into the buffer
+        buf += struct.pack('<i', len(raw_replay))
+        buf += raw_replay
 
-    timestamp = int(res['play_time'].timestamp() * 1e7)
-    buf += struct.pack('<q', timestamp + DATETIME_OFFSET)
+        # pack additional info info buffer.
+        buf += struct.pack('<q', score_id)
 
-    # pack the raw replay data into the buffer
-    buf += struct.pack('<i', len(raw_replay))
-    buf += raw_replay
+        # NOTE: target practice sends extra mods, but
+        # can't submit scores so should not be a problem.
 
-    # pack additional info info buffer.
-    buf += struct.pack('<q', score_id)
+        # send data back to the client
+        conn.resp_headers['Content-Type'] = 'application/octet-stream'
+        conn.resp_headers['Content-Description'] = 'File Transfer'
+        conn.resp_headers['Content-Disposition'] = (
+            'attachment; filename="{username} - '
+            '{artist} - {title} [{version}] '
+            '({play_time:%Y-%m-%d}).osr"'
+        ).format(**res)
 
-    # NOTE: target practice sends extra mods, but
-    # can't submit scores so should not be a problem.
-
-    # send data back to the client
-    conn.resp_headers['Content-Type'] = 'application/octet-stream'
-    conn.resp_headers['Content-Description'] = 'File Transfer'
-    conn.resp_headers['Content-Disposition'] = (
-        'attachment; filename="{username} - '
-        '{artist} - {title} [{version}] '
-        '({play_time:%Y-%m-%d}).osr"'
-    ).format(**res)
-
-    return bytes(buf)
+        return bytes(buf)
 
 @domain.route('/api/get_match')
 async def api_get_match(conn: Connection) -> Optional[bytes]:
@@ -2034,15 +2106,14 @@ async def api_get_match(conn: Connection) -> Optional[bytes]:
     })
 
 @domain.route('/api/get_player_bydiscord')
-async def get_player_bydiscord(conn: Connection) -> Optional[object]:
-    if conn.args not in ('id', 'secret'):
-        return 'lol'
+async def get_player_bydiscord(conn: Connection) -> Optional[bytes]:
+    if not 'id' in conn.args or not 'secret' in conn.args:
+        return b'lol'
 
-    if conn.args['secret'] != 'NpNzbuYZpDbmh5aKpjlD58WNffQB8qWe':
-        return 'lol'
+    if conn.args['secret'] != glob.config.discord_secret:
+        return b'2lol'
 
-    res = await glob.db.fetch('SELECT * FROM discrod WHERE discord_id = %s', [conn.args['id']])
-    print(res)
+    res = await glob.db.fetch('SELECT * FROM discord WHERE discord_id = %s', [conn.args['id']])
 
     return JSON(res)
 
@@ -2170,15 +2241,15 @@ async def get_osz(conn: Connection) -> Optional[bytes]:
     """Handle a map download request (osu.ppy.sh/d/*)."""
     set_id = conn.path[3:]
 
-    if no_video := set_id[-1] == 'n':
-        set_id = set_id[:-1]
+    # if no_video := set_id[-1] == 'n':
+    #     set_id = set_id[:-1]
 
-    if USING_CHIMU:
-        query_str = f'download/{set_id}?n={int(no_video)}'
-    else:
-        query_str = f'd/{set_id}'
+    # if USING_CHIMU:
+    #     query_str = f'download/{set_id}?n={int(no_video)}'
+    # else:
+    #     query_str = f'd/{set_id}'
 
-    conn.resp_headers['Location'] = f'{glob.config.mirror}/{query_str}'
+    conn.resp_headers['Location'] = f'https://osu.gatari.pw/d/{set_id}'
     return (301, b'')
 
 @domain.route(re.compile(r'^/web/maps/'))
@@ -2232,7 +2303,9 @@ async def peppyDMHandler(conn: Connection) -> Optional[bytes]:
 @domain.route('/users', methods=['POST'])
 @ratelimit(period=300, max_count=15)  # 15 registrations / 5mins
 async def register_account(conn: Connection) -> Optional[bytes]:
-    return (400, b'In-Game Registration is DISABLED Register FROM SITE! ^_^')
+    if glob.config.disable_ingame_reg:    
+        return (400, b'In-Game Registration is DISABLED Register FROM SITE! ^_^')
+    
     mp_args = conn.multipart_args
 
     name = mp_args['user[username]']
