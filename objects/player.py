@@ -810,7 +810,6 @@ class Player:
         )
 
         if not res:
-            breakpoint()
             return # ?
 
         stats = self.stats[mode]
