@@ -11,7 +11,7 @@ from objects import glob
 
 """ ava: avatar server (for both ingame & external) """
 
-domain = Domain('a.dev.lol')
+domain = Domain(f'a.{glob.config.domain}')
 
 AVATARS_PATH = Path.cwd() / '.data/avatars'
 DEFAULT_AVATAR = AVATARS_PATH / 'default.jpg'
