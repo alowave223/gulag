@@ -802,7 +802,7 @@ class Player:
 
         res = await glob.db.fetchall(
             f'SELECT s.pp, s.acc FROM {table} s '
-            'LEFT JOIN maps m ON s.map_md5 = m.md5 '
+            'INNER JOIN maps m ON s.map_md5 = m.md5 '
             'WHERE s.userid = %s AND s.mode = %s '
             'AND s.status = 2 AND m.status IN (1, 2) '
             'ORDER BY s.pp DESC LIMIT 100',
@@ -810,6 +810,7 @@ class Player:
         )
 
         if not res:
+            breakpoint()
             return # ?
 
         stats = self.stats[mode]
@@ -841,7 +842,7 @@ class Player:
         # calculate rank.
         res = await glob.db.fetch(
             'SELECT COUNT(*) AS c FROM stats s '
-            'LEFT JOIN users u USING(id) '
+            'INNER JOIN users u USING(id) '
             f'WHERE s.pp_{mode:sql} > %s '
             'AND u.priv & 1',
             [stats.pp]
@@ -871,7 +872,7 @@ class Player:
 
     async def friends_from_sql(self) -> None:
         """Retrieve `self`'s friends from sql."""
-        _friends = {row['user2'] async for row in glob.db.iterall(
+        _friends = {row['user2'] for row in await glob.db.fetchall(
             'SELECT user2 FROM friendships WHERE user1 = %s', [self.id]
         )}
 
@@ -884,7 +885,7 @@ class Player:
             # get all users achievements for this mode
             res = await glob.db.fetchall(
                 'SELECT ua.achid id FROM user_achievements ua '
-                'LEFT JOIN achievements a ON a.id = ua.achid '
+                'INNER JOIN achievements a ON a.id = ua.achid '
                 'WHERE ua.userid = %s AND a.mode = %s',
                 [self.id, mode]
             )
@@ -920,7 +921,7 @@ class Player:
             # calculate rank.
             res['rank'] = (await glob.db.fetch(
                 'SELECT COUNT(*) AS c FROM stats '
-                'LEFT JOIN users USING(id) '
+                'INNER JOIN users USING(id) '
                 f'WHERE pp_{mode:sql} > %s '
                 'AND priv & 1', [res['pp']]
             ))['c'] + 1
@@ -945,7 +946,7 @@ class Player:
         # calculate rank.
         res['rank'] = await glob.db.fetch(
             'SELECT COUNT(*) AS c FROM stats '
-            'LEFT JOIN users USING(id) '
+            'INNER JOIN users USING(id) '
             f'WHERE pp_{mode:sql} > %s '
             'AND priv & 1',
             [res['pp']]
@@ -953,9 +954,11 @@ class Player:
 
         self.stats[mode] = ModeData(**res)
 
-    async def add_to_menu(self, coroutine: Coroutine,
-                          timeout: int = -1, reusable: bool = False
-                         ) -> int:
+    async def add_to_menu(
+        self, coroutine: Coroutine,
+        timeout: int = -1,
+        reusable: bool = False
+    ) -> int:
         """Add a valid callback to the user's osu! chat options."""
         # generate random negative number in int32 space as the key.
         rand = partial(random.randint, 64, 0x7fffffff)

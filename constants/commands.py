@@ -8,6 +8,7 @@ import pprint
 import random
 import re
 import signal
+import struct
 import time
 import uuid
 import datetime
@@ -86,8 +87,10 @@ class CommandSet:
             self.commands.append(Command(
                 # NOTE: this method assumes that functions without any
                 # triggers will be named like '{self.trigger}_{trigger}'.
-                triggers = [f.__name__.removeprefix(f'{self.trigger}_').strip()] \
-                         + aliases,
+                triggers = (
+                    [f.__name__.removeprefix(f'{self.trigger}_').strip()] +
+                    aliases
+                ),
                 callback = f, priv = priv,
                 hidden = hidden, doc = f.__doc__
             ))
@@ -133,7 +136,7 @@ def command(priv: Privileges, aliases: list[str] = [],
 
 @command(Privileges.Normal, aliases=['h'], hidden=True)
 async def _help(ctx: Context) -> str:
-    """Show information of all documented commands the player can access."""
+    """Show all documented commands the play can access."""
     prefix = glob.config.command_prefix
     l = ['Individual commands',
          '-----------']
@@ -404,11 +407,14 @@ async def requests(ctx: Context) -> str:
 
     return '\n'.join(l)
 
-status_to_id = lambda s: {
+_status_str_to_int_map = {
     'unrank': 0,
     'rank': 2,
     'love': 5
-}[s]
+}
+def status_to_id(s: str) -> int:
+    return _status_str_to_int_map[s]
+
 @command(Privileges.Nominator)
 async def _map(ctx: Context) -> str:
     """Changes the ranked status of the most recently /np'ed map."""
@@ -753,7 +759,10 @@ async def unrestrict(ctx: Context) -> str:
     if not (t := await glob.players.get_ensure(name=ctx.args[0])):
         return f'"{ctx.args[0]}" not found.'
 
-    if t.priv & Privileges.Staff and not ctx.player.priv & Privileges.Dangerous:
+    if (
+        t.priv & Privileges.Staff and
+        not ctx.player.priv & Privileges.Dangerous
+    ):
         return 'Only developers can manage staff members.'
 
     if not t.restricted:
@@ -850,9 +859,10 @@ async def shutdown(ctx: Context) -> str:
 _fake_users = []
 @command(Privileges.Dangerous, aliases=['fu'])
 async def fakeusers(ctx: Context) -> str:
-    """Add a specified number of fake presences to the online player list."""
-    # NOTE: this is mostly just for speedtesting things regarding presences/stats.
-    # it's implementation is indeed quite cursed (for speed).
+    """Add fake users to the online player list (for testing)."""
+    # NOTE: this is mostly just for speedtesting things
+    # regarding presences/stats. it's implementation is
+    # indeed quite cursed, but rather efficient.
     if (
         len(ctx.args) != 2 or
         ctx.args[0] not in ('add', 'rm') or
@@ -862,8 +872,8 @@ async def fakeusers(ctx: Context) -> str:
 
     action = ctx.args[0]
     amount = int(ctx.args[1])
-    if not 0 < amount <= 5000:
-        return 'Amount must be in range 0-5000.'
+    if not 0 < amount <= 100_000:
+        return 'Amount must be in range 0-100k.'
 
     # we start at half way through
     # the i32 space for fake user ids.
@@ -896,18 +906,45 @@ async def fakeusers(ctx: Context) -> str:
         end_id = start_id + amount
         vn_std = GameMode.vn_std
 
+        base_player = Player(id=0, name='', **const_uinfo)
+        base_player.stats[vn_std] = copy.copy(ctx.player.stats[vn_std])
+        new_fakes = []
+
+        # static part of the presence packet,
+        # no need to redo this every iteration.
+        static_presence = struct.pack(
+            '<BBBffi',
+            19, # -5 (EST) + 24
+            38, # country (canada)
+            0b11111, # all in-game privs
+            0.0, 0.0, # lat, lon
+            1 # rank #1
+        )
+
         for i in range(start_id, end_id):
+            # create new fake player from base
             name = f'fake #{i - (FAKE_ID_START - 1)}'
-            fake = Player(id=i, name=name, **const_uinfo)
+            fake = copy.copy(base_player)
+            fake.id = i
+            fake.name = name
 
-            # copy vn_std stats (just for rank lol, could optim)
-            fake.stats[vn_std] = copy.copy(ctx.player.stats[vn_std])
-
-            data += packets.userPresence(fake) # <- uses rank
+            # append userpresence packet
+            data += struct.pack(
+                '<HxIi',
+                83, # packetid
+                21 + len(name), # packet len
+                i # userid
+            )
+            data += f'\x0b{chr(len(name))}{name}'.encode()
+            data += static_presence
             data += _stats
 
-            glob.players.append(fake)
-            _fake_users.append(fake)
+            new_fakes.append(fake)
+
+        # extend all added fakes to the real list
+        _fake_users.extend(new_fakes)
+        glob.players.extend(new_fakes)
+        del new_fakes
 
         msg = 'Added.'
     else: # remove
@@ -1173,10 +1210,11 @@ if glob.config.advanced:
     from sys import modules as installed_mods
     __py_namespace = globals() | {
         mod: __import__(mod) for mod in (
-        'asyncio', 'dis', 'os', 'sys', 'struct', 'discord',
-        'cmyui',  'datetime', 'time', 'inspect', 'math',
-        'importlib'
-    ) if mod in installed_mods}
+            'asyncio', 'dis', 'os', 'sys', 'struct', 'discord',
+            'cmyui',  'datetime', 'time', 'inspect', 'math',
+            'importlib'
+        ) if mod in installed_mods
+    }
 
     @command(Privileges.Dangerous)
     async def py(ctx: Context) -> str:
@@ -1219,7 +1257,7 @@ if glob.config.advanced:
 
 @mp_commands.add(Privileges.Normal, aliases=['h'])
 async def mp_help(ctx: Context) -> str:
-    """Show information of all documented mp commands the player can access."""
+    """Show all documented multiplayer commands the play can access."""
     prefix = glob.config.command_prefix
     cmds = []
 
@@ -1389,7 +1427,7 @@ async def mp_invite(ctx: Context) -> str:
     if not (t := glob.players.get(name=ctx.args[0])):
         return 'Could not find a user by that name.'
     elif t is glob.bot:
-        ctx.player.send("I'm too busy!", sender=glob.bot)
+        ctx.player.send_bot("I'm too busy!")
         return
 
     if ctx.player is t:
@@ -1480,8 +1518,10 @@ async def mp_teams(ctx: Context) -> str:
 
     # find the new appropriate default team.
     # defaults are (ffa: neutral, teams: red).
-    if ctx.match.team_type in (MatchTeamTypes.head_to_head,
-                       MatchTeamTypes.tag_coop):
+    if ctx.match.team_type in (
+        MatchTeamTypes.head_to_head,
+        MatchTeamTypes.tag_coop
+    ):
         new_t = MatchTeams.neutral
     else:
         new_t = MatchTeams.red
@@ -1584,8 +1624,7 @@ async def mp_endscrim(ctx: Context) -> str:
 
 @mp_commands.add(Privileges.Normal, aliases=['rm'])
 async def mp_rematch(ctx: Context) -> str:
-    """Restart a scrim with the previous match points, """ \
-    """or roll back the most recent match point."""
+    """Restart a scrim, or roll back previous match point."""
     if ctx.args:
         return 'Invalid syntax: !mp rematch'
 
@@ -1598,8 +1637,10 @@ async def mp_rematch(ctx: Context) -> str:
         else:
             # re-start scrimming with old points
             ctx.match.is_scrimming = True
-            msg = (f'A rematch has been started by {ctx.player.name}; '
-                f'first to {ctx.match.winning_pts} points wins. Best of luck!')
+            msg = (
+                f'A rematch has been started by {ctx.player.name}; '
+                f'first to {ctx.match.winning_pts} points wins. Best of luck!'
+            )
     else:
         # reset the last match point awarded
         if not ctx.match.winners:
@@ -1777,7 +1818,7 @@ async def mp_pick(ctx: Context) -> str:
 
 @pool_commands.add(Privileges.Tournament, aliases=['h'], hidden=True)
 async def pool_help(ctx: Context) -> str:
-    """Show information of all documented pool commands the player can access."""
+    """Show all documented mappool commands the play can access."""
     prefix = glob.config.command_prefix
     cmds = []
 
@@ -1932,7 +1973,10 @@ async def pool_list(ctx: Context) -> str:
     l = [f'Mappools ({len(pools)})']
 
     for pool in pools:
-        l.append(f'[{pool.created_at:%Y-%m-%d}] {pool.id}. {pool.name}, by {pool.created_by}.')
+        l.append(
+            f'[{pool.created_at:%Y-%m-%d}] {pool.id}. '
+            f'{pool.name}, by {pool.created_by}.'
+        )
 
     return '\n'.join(l)
 
@@ -1964,7 +2008,7 @@ async def pool_info(ctx: Context) -> str:
 
 @clan_commands.add(Privileges.Normal, aliases=['h'])
 async def clan_help(ctx: Context) -> str:
-    """Show information of all documented clan commands the player can access."""
+    """Show all documented clan commands the play can access."""
     prefix = glob.config.command_prefix
     cmds = []
 
