@@ -1481,7 +1481,7 @@ async def api_get_player_info(conn: Connection) -> Optional[bytes]:
     if conn.args['scope'] in ('stats', 'all'): # user stats
         # get all regular stats
         res = await glob.db.fetch(
-            'SELECT stats.*, users.country FROM stats '
+            'SELECT stats.*, users.country, users.creation_time, users.latest_activity FROM stats '
             'INNER JOIN users ON users.id = stats.id '
             'WHERE stats.id = %s', [pid]
         )
