@@ -930,7 +930,7 @@ async def getReplay(p: 'Player', conn: Connection) -> Optional[bytes]:
             return
 
         userid = await glob.db.fetch(f'SELECT userid FROM {scores_table} WHERE id = {score_id}')
-        
+
         if p.id != userid.get('userid'):
             await glob.db.execute(f'UPDATE {scores_table} SET watched = watched + 1 WHERE id = {score_id}')
 
@@ -1093,6 +1093,13 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
                     glob.cache['unsubmitted'].add(map_md5)
                     return b'-1|false'
         else:
+            # try to update bmap status after status timeout
+            if bmap.last_check + glob.config.map_status_timeout <= int(time.time()):
+                # check if map updated then
+                # cache it with new status
+                if (updated := await bmap.update_status(bmap.md5)):
+                    bmap = updated
+
             # found in sql - add to cache
             glob.cache['beatmap'][bmap.md5] = {
                 'timeout': (glob.config.map_cache_timeout +
