@@ -382,7 +382,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
     # eventually we could try supporting these,
     # but it mostly depends on the mirror.
     if conn.args['q'] not in ('Newest', 'Top+Rated', 'Most+Played'):
-        params['query'] = conn.args['q']
+        params['query'] = conn.args['q'].replace('+', ' ')
 
     if conn.args['m'] != '-1':
         params |= {'mode': conn.args['m']}
