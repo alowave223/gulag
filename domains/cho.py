@@ -512,7 +512,6 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
             if not all([x['priv'] & Privileges.Normal for x in hwid_matches]):
                 log(f'User {username} tried to login but he has hwid mathces:', Ansi.LRED)
                 print([x['priv'] & Privileges.Normal for x in hwid_matches])
-                print(x['priv'])
                 print(hwid_matches)
                 return (packets.notification('Please contact staff directly '
                                              'to create an account.') +
