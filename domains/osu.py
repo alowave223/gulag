@@ -392,7 +392,6 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
         status = RankedStatus.from_osudirect(int(conn.args['r']))
         params |= {'status': status.osu_api}
 
-    print(params)
     async with glob.http.get(search_url, params=params) as resp:
         if not resp:
             from utils.misc import point_of_interest
