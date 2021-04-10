@@ -510,12 +510,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
             # we will not allow any banned matches; if there are any,
             # then ask the user to contact staff and resolve manually.
             if not all([x['priv'] & Privileges.Normal for x in hwid_matches]):
-                log(f'User {username} tried to login but he has hwid mathces:', Ansi.LRED)
-                print([x['priv'] & Privileges.Normal for x in hwid_matches])
-                print(hwid_matches)
-                return (packets.notification('Please contact staff directly '
-                                             'to create an account.') +
-                        packets.userID(-1)), 'no'
+                log('Hwid bruh', Ansi.RED)
 
         else:
             # player is verified
