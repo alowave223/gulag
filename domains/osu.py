@@ -860,7 +860,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
     notif_caps = glob.config.notif_caps[s.mode]
 
     if s.status == SubmissionStatus.BEST and s.pp >= notif_caps:
-        webhook_url = glob.config.webhooks['audit-log']
+        webhook_url = glob.config.webhooks['scores']
         webhook = Webhook(url=webhook_url)
 
         if not s.max_combo <= s.max_combo - 20 and s.nmiss == 0:
@@ -873,7 +873,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         
         embed = Embed(
             title = f'__New {s.status!r} Score! **{s.pp:.2f}pp**__',
-            description = f'▸ [{s.mode!r}] • #{stats.rank} • {stats.pp} • {stats.acc:.2f}%\n▸ {status} • {s.grade} • {s.mods!r} • {s.acc:.2f}%\n[{s.bmap.artist} - {s.bmap.title} [{s.bmap.version}]](https://sakuru.pw/direct?id={s.bmap.set_id})',
+            description = f'▸ [{s.mode!r}] • #{stats.rank} • {stats.pp}pp • {stats.acc:.2f}%\n▸ {status} • {s.grade} • {s.mods!r} • {s.acc:.2f}%\n[{s.bmap.artist} - {s.bmap.title} [{s.bmap.version}]](https://sakuru.pw/direct?id={s.bmap.set_id})',
             color=0xbb0ebe,
             timestamp = datetime.datetime.utcnow()
         )

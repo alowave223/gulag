@@ -439,7 +439,7 @@ async def _map(ctx: Context) -> str:
     # for updating cache would be faster?
     # surely this will not scale as well..
 
-    webhook_url = glob.config.webhooks['audit-log']
+    webhook_url = glob.config.webhooks['maps']
     webhook = Webhook(url=webhook_url)
 
     if ctx.args[1] == 'set':
@@ -747,13 +747,52 @@ async def restrict(ctx: Context) -> str:
 
     await t.restrict(admin=ctx.player, reason=reason)
 
+    webhook_url = glob.config.webhooks['shame']
+    webhook = Webhook(url=webhook_url)
+
+    embed = Embed(
+        title = 'Player has been restricted!',
+        color=0xbb0ebe,
+        timestamp = datetime.datetime.utcnow()
+    )
+
+    embed.set_author(
+        url = ctx.player.url,
+        name = t.name,
+        icon_url = 'https://sakuru.pw/static/ingame.png'
+    )
+
+    embed.set_thumbnail(
+        url = t.avatar_url
+    )
+
+    embed.add_field(
+        name = 'Reason',
+        value = reason,
+        inline = True
+    )
+
+    embed.add_field(
+        name = 'Admin',
+        value = f'[{ctx.player.name}]({ctx.player.url})',
+        inline = True
+    )
+
+    embed.set_footer(
+        text = "shame.",
+        icon_url =  ctx.player.avatar_url
+    )
+
+    webhook.add_embed(embed)
+    await webhook.post(glob.http)
+
     return f'{t} was restricted.'
 
 @command(Privileges.Admin, hidden=True)
 async def unrestrict(ctx: Context) -> str:
     """Unrestrict a specified player's account, with a reason."""
     if len(ctx.args) < 2:
-        return 'Invalid syntax: !restrict <name> <reason>'
+        return 'Invalid syntax: !unrestrict <name> <reason>'
 
     # find any user matching (including offline).
     if not (t := await glob.players.get_ensure(name=ctx.args[0])):
