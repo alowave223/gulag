@@ -438,7 +438,6 @@ async def _map(ctx: Context) -> str:
     # XXX: not sure if getting md5s from sql
     # for updating cache would be faster?
     # surely this will not scale as well..
-
     webhook_url = glob.config.webhooks['maps']
     webhook = Webhook(url=webhook_url)
 
