@@ -5,11 +5,9 @@ from collections import defaultdict
 from datetime import datetime
 from enum import IntEnum
 from enum import unique
-from typing import Optional
 
 from cmyui import Ansi
 from cmyui import log
-from cmyui.osu import beatmap
 
 from constants.gamemodes import GameMode
 from constants.mods import Mods
