@@ -318,7 +318,7 @@ WELCOME_MSG = '\n'.join((
 RESTRICTED_MSG = (
     'Your account is currently in restricted mode. '
     'If you believe this is a mistake, or have waited a period '
-    'greater than 3 months, you may appeal via the form on the site.'
+    'greater than 1 months, you may appeal via the form on the [site](https://sakuru.pw/doc/appeal).'
 )
 
 async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
@@ -375,11 +375,13 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     #       can sometimes be quite useful when testing.
     if not glob.app.debug:
         if osu_ver < (dt.now() - td(60)):
+            log(f'User {username} tried to login with old version of osu! ({r["ver"]})', Ansi.LRED)
             return (packets.versionUpdateForced() +
                     packets.userID(-2)), 'no'
 
     # ensure utc_offset is a number (negative inclusive).
     if not _isdecimal(client_info[1], _negative=True):
+        log(f'User {username} tried to login with bad utc_offset ({client_info[1]})', Ansi.LRED)
         return # invalid request
 
     utc_offset = int(client_info[1])
@@ -392,6 +394,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     # [3]: md5(uniqueid) (osu! uninstall id)
     # [4]: md5(uniqueid2) (disk signature/serial num)
     if len(client_hashes := client_info[3].split(':')[:-1]) != 5:
+        log(f'User {username} tried to login with bad client_hashes', Ansi.LRED)
         return # invalid request
 
     client_hashes.pop(1) # no need for non-md5 adapters
@@ -418,6 +421,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
                 data = packets.userID(-1) + \
                        packets.notification('User already logged in.')
 
+                log(f'User {username} tried to login but he is already logged in.', Ansi.LRED)
                 return data, 'no'
 
     user_info = await glob.db.fetch(
@@ -429,6 +433,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
     if not user_info:
         # no account by this name exists.
+        log(f'User {username} tried to login but his account doesn\'t exists.', Ansi.LRED)
         return packets.userID(-1), 'no'
 
     tourney_privs = int(Privileges.Normal | Privileges.Donator)
@@ -451,9 +456,11 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     # results to speed up subsequent logins.
     if pw_bcrypt in bcrypt_cache: # ~0.01 ms
         if pw_md5 != bcrypt_cache[pw_bcrypt]:
+            log(f'User {username} tried to login but his password was incorrect (cached)', Ansi.LRED)
             return packets.userID(-1), 'no'
     else: # ~200ms
         if not bcrypt.checkpw(pw_md5, pw_bcrypt):
+            log(f'User {username} tried to login but his password was incorrect (decoded)', Ansi.LRED)
             return packets.userID(-1), 'no'
 
         bcrypt_cache[pw_bcrypt] = pw_md5
@@ -503,6 +510,10 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
             # we will not allow any banned matches; if there are any,
             # then ask the user to contact staff and resolve manually.
             if not all([x['priv'] & Privileges.Normal for x in hwid_matches]):
+                log(f'User {username} tried to login but he has hwid mathces:', Ansi.LRED)
+                print([x['priv'] & Privileges.Normal for x in hwid_matches])
+                print(x['priv'])
+                print(hwid_matches)
                 return (packets.notification('Please contact staff directly '
                                              'to create an account.') +
                         packets.userID(-1)), 'no'
