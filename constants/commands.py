@@ -379,33 +379,48 @@ async def get_apikey(ctx: Context) -> str:
 @command(Privileges.Nominator, aliases=['reqs'], hidden=True)
 async def requests(ctx: Context) -> str:
     """Check the nomination request queue."""
+    if ctx.args and ctx.args[0] not in ('reject'):
+        return 'Invalid syntax: !requests (reject) [id]'
+
     if ctx.args:
-        return 'Invalid syntax: !requests'
+        if len(ctx.args) < 2:
+            return 'You need to provide an id of request that you looking for.'
+        id = ctx.args[1]
 
-    res = await glob.db.fetchall(
-        'SELECT map_id, player_id, datetime '
-        'FROM map_requests WHERE active = 1',
-        _dict=False # return rows as tuples
-    )
+        if not id.isdecimal():
+            return 'Invalid id provided.'
 
-    if not res:
-        return 'The queue is clean! (0 map request(s))'
+        if not await glob.db.fetch('SELECT 1 FROM map_requests WHERE id = %s', [id]):
+            return 'Invalid id provided.'
 
-    l = [f'Total requests: {len(res)}']
+        await glob.db.fetch('UPDATE map_requests SET active = 0 WHERE id = %s', [id])
 
-    for (map_id, player_id, dt) in res:
-        # find player & map for each row, and add to output.
-        if not (p := await glob.players.get_ensure(id=player_id)):
-            l.append(f'Failed to find requesting player ({player_id})?')
-            continue
+        return f'Successfully rejected an request ID:{id}!'
+    else:
+        res = await glob.db.fetchall(
+            'SELECT id, map_id, player_id, datetime '
+            'FROM map_requests WHERE active = 1',
+            _dict=False # return rows as tuples
+        )
 
-        if not (bmap := await Beatmap.from_bid(map_id)):
-            l.append(f'Failed to find requested map ({map_id})?')
-            continue
+        if not res:
+            return 'The queue is clean! (0 map request(s))'
 
-        l.append(f'[{p.embed} @ {dt:%b %d %I:%M%p}] {bmap.embed}.')
+        l = [f'Total requests: {len(res)}']
 
-    return '\n'.join(l)
+        for (id, map_id, player_id, dt) in res:
+            # find player & map for each row, and add to output.
+            if not (p := await glob.players.get_ensure(id=player_id)):
+                l.append(f'Failed to find requesting player ({player_id})?')
+                continue
+
+            if not (bmap := await Beatmap.from_bid(map_id)):
+                l.append(f'Failed to find requested map ({map_id})?')
+                continue
+
+            l.append(f'[{p.embed} @ {dt:%b %d %I:%M%p}] {bmap.embed}. ID:{id}')
+
+        return '\n'.join(l)
 
 _status_str_to_int_map = {
     'unrank': 0,
