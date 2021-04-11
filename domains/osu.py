@@ -1094,7 +1094,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
                     return b'-1|false'
         else:
             # try to update bmap status after status timeout
-            if bmap.last_check + glob.config.map_status_timeout <= int(time.time()):
+            if bmap.last_check + glob.config.map_status_timeout <= time.time():
                 # check if map updated then
                 # cache it with new status
                 if (updated := await bmap.update_status(bmap.md5)):
