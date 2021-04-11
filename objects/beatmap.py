@@ -506,7 +506,7 @@ class Beatmap:
         ))['set_id']
         url = 'https://old.ppy.sh/api/get_beatmaps'
         params = {'k': glob.config.osu_api_key, 's': set_id}
-        log('Requested update status', Ansi.RED)
+
         async with glob.http.get(url, params=params) as resp:
             if not resp or resp.status != 200:
                 return # osu!api request failed.
