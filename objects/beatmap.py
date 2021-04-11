@@ -501,7 +501,7 @@ class Beatmap:
         """Update map status from osu!api if there is update available."""
         set_id = (await glob.db.fetch(
             'SELECT set_id '
-            'FROM maps WHERE md5 = %s', 
+            'FROM maps WHERE md5 = %s',
             [md5]
         ))['set_id']
         url = 'https://old.ppy.sh/api/get_beatmaps'
