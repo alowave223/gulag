@@ -859,7 +859,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
     
     notif_caps = glob.config.notif_caps[s.mode]
 
-    if s.status == SubmissionStatus.BEST and s.pp >= notif_caps:
+    if s.status == SubmissionStatus.BEST and s.pp >= notif_caps and not s.player.restricted:
         webhook_url = glob.config.webhooks['scores']
         webhook = Webhook(url=webhook_url)
 

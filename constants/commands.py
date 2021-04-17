@@ -766,7 +766,7 @@ async def restrict(ctx: Context) -> str:
 
     embed = Embed(
         title = 'Player has been restricted!',
-        color=0xbb0ebe,
+        color = 0xbb0ebe,
         timestamp = datetime.datetime.utcnow()
     )
 

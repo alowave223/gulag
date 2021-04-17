@@ -558,7 +558,7 @@ class Beatmap:
                                 del glob.cache['beatmap'][api_md5]
 
                         if glob.app.debug:
-                            log(f"Updated map {bmap['artist']} - {bmap['title']} [{bmap['version']}] from {current_status!s} to {api_status!s}", Ansi.GREEN)
+                            log(f"Updated map {self.full} from {current_status!s} to {api_status!s}", Ansi.GREEN)
                 else:
                     # update our last_check in db
                     await glob.db.execute('UPDATE maps SET last_check = %s WHERE set_id = %s', [int(time.time()), set_id])
