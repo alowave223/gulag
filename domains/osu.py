@@ -722,6 +722,12 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             additive -= s.prev_best.score
 
         stats.rscore += additive
+    
+    # i don't wanna make
+    # restricted score best
+    # make it failed
+    if s.player.restricted:
+        s.status = SubmissionStatus.FAILED
 
     # update user with new stats
     await glob.db.execute(
