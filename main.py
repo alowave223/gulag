@@ -223,9 +223,8 @@ if __name__ == '__main__':
     else:
         glob.datadog = None
 
-    # start up the server; this starts
-    # an event loop internally, using
-    # uvloop if it's installed.
-    app.run(glob.config.server_addr,
-            handle_signals=True, # SIGHUP, SIGTERM, SIGINT
-            sigusr1_restart=True) # use SIGUSR1 for restarts
+    # start up the server; this starts an event loop internally,
+    # using uvloop if it's installed. it uses SIGUSR1 for restarts.
+    # NOTE: eventually the event loop creation will likely be
+    # moved into the gulag codebase for increased flexibility.
+    app.run(glob.config.server_addr, handle_restart=True)

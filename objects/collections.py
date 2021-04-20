@@ -199,6 +199,7 @@ class PlayerList(list):
 
                 return attr, val
         else:
+            print(kwargs)
             raise ValueError('Missing attribute in kwargs! (must provide token/id/name)')
 
     def get(self, **kwargs) -> Optional[Player]:
