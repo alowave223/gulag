@@ -539,7 +539,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
             log(msg_content, Ansi.LRED)
 
-    # get clan & clan rank if we're in a clan
+    # get clan & clan priv if we're in a clan
     if user_info['clan_id'] != 0:
         clan = glob.clans.get(id=user_info.pop('clan_id'))
         clan_priv = ClanPrivileges(user_info.pop('clan_priv'))
@@ -609,7 +609,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     await p.stats_from_sql_full()
     await p.friends_from_sql()
 
-    if glob.config.production:
+    if ip != '127.0.0.1':
         # update their country data with
         # the IP from the login request.
         await p.fetch_geoloc(ip)

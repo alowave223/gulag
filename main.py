@@ -8,19 +8,10 @@
 # osu!'s built-in registration.
 # certificate: https://akatsuki.pw/static/ca.crt
 
-import sys
-
-sys._excepthook = sys.excepthook # backup
-def _excepthook(type, value, traceback):
-    if type is KeyboardInterrupt:
-        print('\33[2K\r', end='Aborted startup.')
-        return
-    print('\x1b[0;31mgulag ran into an issue '
-          'before starting up :(\x1b[0m')
-    sys._excepthook(type, value, traceback)
-sys.excepthook = _excepthook
+__import__('utils.misc', fromlist=[None]).install_excepthook()
 
 import os
+import sys
 from pathlib import Path
 
 import aiohttp
@@ -143,7 +134,8 @@ async def after_serving() -> None:
 if __name__ == '__main__':
     # attempt to start up gulag.
     if sys.version_info < (3, 9):
-        sys.exit('The minimum python version for gulag is 3.9')
+        sys.exit('gulag uses many modern python features, '
+                 'and the minimum python version is 3.9.')
 
     # make sure nginx & mysqld are running.
     if (
@@ -155,14 +147,14 @@ if __name__ == '__main__':
     if not os.path.exists('/var/run/nginx.pid'):
         sys.exit('Please start your nginx server.')
 
-    if glob.config.production:
-        if os.geteuid() == 0:
-            log('It is not recommended to run gulag as root, '
-                'especially in production..', Ansi.LYELLOW)
+    # warn if gulag is running on root.
+    if os.geteuid() == 0:
+        log('It is not recommended to run gulag as root, '
+            'especially in production..', Ansi.LYELLOW)
 
-            if glob.config.advanced:
-                log('The risk is even greater with features '
-                    'such as config.advanced enabled.', Ansi.LRED)
+        if glob.config.advanced:
+            log('The risk is even greater with features '
+                'such as config.advanced enabled.', Ansi.LRED)
 
     # set cwd to /gulag.
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
@@ -223,8 +215,9 @@ if __name__ == '__main__':
     else:
         glob.datadog = None
 
-    # start up the server; this starts an event loop internally,
-    # using uvloop if it's installed. it uses SIGUSR1 for restarts.
-    # NOTE: eventually the event loop creation will likely be
-    # moved into the gulag codebase for increased flexibility.
-    app.run(glob.config.server_addr, handle_restart=True)
+    # start up the server; this starts
+    # an event loop internally, using
+    # uvloop if it's installed.
+    app.run(glob.config.server_addr,
+            handle_signals=True, # SIGHUP, SIGTERM, SIGINT
+            sigusr1_restart=True) # use SIGUSR1 for restarts

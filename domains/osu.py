@@ -12,7 +12,6 @@ from enum import IntEnum
 from enum import unique
 from functools import wraps
 from pathlib import Path
-from typing import Any
 from typing import Callable
 from typing import Optional
 from typing import TYPE_CHECKING
@@ -47,6 +46,7 @@ from objects.score import SubmissionStatus
 from utils.misc import escape_enum
 from utils.misc import point_of_interest
 from utils.misc import pymysql_encode
+from utils.recalculator import PPCalculator
 
 if TYPE_CHECKING:
     from objects.player import Player
@@ -226,7 +226,7 @@ async def osuGetBeatmapInfo(p: 'Player', conn: Connection) -> Optional[bytes]:
         # only allows us to send back one per gamemode,
         # so we'll just send back relax for the time being..
         # XXX: perhaps user-customizable in the future?
-        ranks = ['N', 'N', 'N', 'N']
+        grades = ['N', 'N', 'N', 'N']
 
         for score in await glob.db.fetchall(
             'SELECT grade, mode FROM scores_rx '
@@ -234,11 +234,11 @@ async def osuGetBeatmapInfo(p: 'Player', conn: Connection) -> Optional[bytes]:
             'AND status = 2',
             [res['md5'], p.id]
         ):
-            ranks[score['mode']] = score['grade']
+            grades[score['mode']] = score['grade']
 
         ret.append(
-            '{i}|{id}|{set_id}|{md5}|{status}|{ranks}'.format(
-                i=idx, ranks='|'.join(ranks), **res
+            '{i}|{id}|{set_id}|{md5}|{status}|{grades}'.format(
+                i = idx, grades = '|'.join(grades), **res
             )
         )
 
@@ -394,14 +394,13 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
 
     async with glob.http.get(search_url, params=params) as resp:
         if not resp:
-            from utils.misc import point_of_interest
             point_of_interest()
 
         if USING_CHIMU: # error handling varies
             if resp.status == 404:
                 return b'0' # no maps found
             elif resp.status != 200:
-                return b'0'
+                point_of_interest()
         else: # cheesegull
             if resp.status != 200:
                 return b'Failed to retrieve data from mirror!'
@@ -410,6 +409,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
 
         if USING_CHIMU:
             if result['code'] != 0:
+                point_of_interest()
                 return b'Failed to retrieve data from mirror!'
             result = result['data']
 
@@ -497,6 +497,9 @@ async def osuSearchSetHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
             '0|0|0|0|0').format(**bmapset).encode()
     # 0s are threadid, has_vid, has_story, filesize, filesize_novid
 
+def chart_entry(name: str, k: Optional[object], v: object) -> str:
+    return f'{name}Before:{k or ""}|{name}After:{v}'
+
 @domain.route('/web/osu-submit-modular-selector.php', methods=['POST'])
 @required_mpargs({'x', 'ft', 'score', 'fs', 'bmk', 'iv',
                   'c1', 'st', 'pass', 'osuver', 's'})
@@ -536,17 +539,18 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         if not s.player.restricted:
             glob.players.enqueue(packets.userStats(s.player))
 
-    table = s.mode.sql_table
+    scores_table = s.mode.sql_table
+    mode_vn = s.mode.as_vanilla
 
     # Check for score duplicates
     # TODO: might need to improve?
     res = await glob.db.fetch(
-        f'SELECT 1 FROM {table} '
-        'WHERE play_time > DATE_SUB(NOW(), INTERVAL 2 MINUTE) '  # last 2mins
+        f'SELECT 1 FROM {scores_table} '
+        'WHERE play_time > DATE_SUB(NOW(), INTERVAL 2 MINUTE) ' # last 2mins
         'AND mode = %s AND map_md5 = %s '
         'AND userid = %s AND mods = %s '
         'AND score = %s AND play_time', [
-            s.mode.as_vanilla, s.bmap.md5,
+            mode_vn, s.bmap.md5,
             s.player.id, s.mods, s.score
         ]
     )
@@ -625,11 +629,11 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             # If there was previously a score on the map, add old #1.
             prev_n1 = await glob.db.fetch(
                 'SELECT u.id, name FROM users u '
-                f'INNER JOIN {table} s ON u.id = s.userid '
+                f'INNER JOIN {scores_table} s ON u.id = s.userid '
                 'WHERE s.map_md5 = %s AND s.mode = %s '
                 'AND s.status = 2 AND u.priv & 1 '
                 f'ORDER BY s.{scoring} DESC LIMIT 1',
-                [s.bmap.md5, s.mode.as_vanilla], _dict=False
+                [s.bmap.md5, mode_vn], _dict=False
             )
 
             if prev_n1 and s.player.id != prev_n1[0]:
@@ -644,26 +648,26 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         # Update any preexisting personal best
         # records with SubmissionStatus.SUBMITTED.
         await glob.db.execute(
-            f'UPDATE {table} SET status = 1 '
+            f'UPDATE {scores_table} SET status = 1 '
             'WHERE status = 2 AND map_md5 = %s '
             'AND userid = %s AND mode = %s',
-            [s.bmap.md5, s.player.id, s.mode.as_vanilla]
+            [s.bmap.md5, s.player.id, mode_vn]
         )
 
     s.id = await glob.db.execute(
-        f'INSERT INTO {table} VALUES (NULL, '
+        f'INSERT INTO {scores_table} VALUES (NULL, '
         '%s, %s, %s, %s, %s, %s, '
         '%s, %s, %s, %s, %s, %s, '
         '%s, %s, %s, %s, '
         '%s, %s, %s, %s, %s)', [
             s.bmap.md5, s.score, s.pp, s.acc, s.max_combo, s.mods,
             s.n300, s.n100, s.n50, s.nmiss, s.ngeki, s.nkatu,
-            s.grade, s.status, s.mode.as_vanilla, s.play_time,
-            s.time_elapsed, s.client_flags, s.player.id, s.perfect, 0
+            s.grade, s.status, mode_vn, s.play_time,
+            s.time_elapsed, s.client_flags, s.player.id, s.perfect
         ]
     )
 
-    if s.status != SubmissionStatus.FAILED:
+    if s.passed:
         # All submitted plays should have a replay.
         # If not, they may be using a score submitter.
         replay_missing = (
@@ -696,69 +700,110 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
     prev_stats = copy.copy(stats)
 
     # update playtime & plays
-    stats.playtime += s.time_elapsed / 1000
+    stats.playtime += s.time_elapsed // 1000
     stats.plays += 1
 
-    s.bmap.plays += 1
     if s.passed:
-        s.bmap.passes += 1
+        # real submitted score, update more stats
 
-    # update max combo
-    if s.max_combo > stats.max_combo:
-        stats.max_combo = s.max_combo
+        # update max combo
+        if s.max_combo > stats.max_combo:
+            stats.max_combo = s.max_combo
 
-    # update total score
-    stats.tscore += s.score
+        if s.bmap.awards_pp:
+            # update total score
+            stats.tscore += s.score
 
-    # if this is our (new) best play on
-    # the map, update our ranked score.
-    if s.status == SubmissionStatus.BEST and s.bmap.awards_pp:
-        # add our new ranked score.
-        additive = s.score
+            # update ranked score, weighted pp & acc
+            # if this is our (new) best score on the map
+            if s.status == SubmissionStatus.BEST:
+                # add our new ranked score.
+                additional_rscore = s.score
 
-        if s.prev_best:
-            # we previously had a score, so remove
-            # it's score from our ranked score.
-            additive -= s.prev_best.score
+                if s.prev_best:
+                    # we previously had a score, so remove
+                    # it's score from our ranked score.
+                    additional_rscore -= s.prev_best.score
 
-        stats.rscore += additive
-    
-    # i don't wanna make
-    # restricted score best
-    # make it failed
-    if s.player.restricted:
-        s.status = SubmissionStatus.FAILED
+                stats.rscore += additional_rscore
 
-    # update user with new stats
-    await glob.db.execute(
-        'UPDATE stats SET rscore_{0:sql} = %s, '
-        'tscore_{0:sql} = %s, playtime_{0:sql} = %s, '
-        'plays_{0:sql} = %s, maxcombo_{0:sql} = %s '
-        'WHERE id = %s'.format(s.mode), [
-            stats.rscore, stats.tscore,
-            stats.playtime, stats.plays,
-            stats.max_combo, s.player.id
-        ]
-    )
+                # fetch scores sorted by pp for total acc/pp calc
+                res = await glob.db.fetchall(
+                    f'SELECT s.pp, s.acc FROM {scores_table} s '
+                    'INNER JOIN maps m ON s.map_md5 = m.md5 '
+                    'WHERE s.userid = %s AND s.mode = %s '
+                    'AND s.status = 2 AND m.status IN (2, 3) ' # ranked, approved
+                    'ORDER BY s.pp DESC',
+                    [s.player.id, mode_vn]
+                )
+
+                # calculate total accuracy & pp with top 100 scores
+                top_100_pp = res[:100] # (top 100 by pp)
+
+                # total weighted accuracy
+                tot = div = 0
+                for i, row in enumerate(top_100_pp):
+                    add = int((0.95 ** i) * 100)
+                    tot += row['acc'] * add
+                    div += add
+                stats.acc = tot / div
+
+                # total weighted pp
+                weighted_pp = sum([row['pp'] * 0.95 ** i
+                                for i, row in enumerate(top_100_pp)])
+                bonus_pp = 416.6667 * (1 - 0.9994 ** len(res))
+                stats.pp = round(weighted_pp + bonus_pp)
+
+        # keep stats up to date in sql
+        await glob.db.execute(
+            'UPDATE stats SET pp_{0:sql} = %s, '
+            'plays_{0:sql} = plays_{0:sql} + 1, '
+            'acc_{0:sql} = %s, rscore_{0:sql} = %s, '
+            'tscore_{0:sql} = %s, playtime_{0:sql} = %s, '
+            'maxcombo_{0:sql} = %s '
+            'WHERE id = %s'.format(s.mode),
+            [
+                stats.pp, stats.acc, stats.rscore,
+                stats.tscore, stats.playtime,
+                stats.max_combo, s.player.id
+            ]
+        )
+
+        # calculate rank.
+        # TODO: adjust any people inbetween we passed,
+        # check whether they're online, and push their
+        # stats to all online players if nescessary.
+        res = await glob.db.fetch(
+            'SELECT COUNT(*) AS c FROM stats s '
+            'INNER JOIN users u USING(id) '
+            f'WHERE s.pp_{s.mode:sql} > %s '
+            'AND u.priv & 1',
+            [stats.pp]
+        )
+
+        stats.rank = res['c'] + 1
+        s.player.enqueue(packets.userStats(s.player))
 
     if not s.player.restricted:
         # update beatmap with new stats
+        s.bmap.plays += 1
+        if s.passed:
+            s.bmap.passes += 1
+
         await glob.db.execute(
             'UPDATE maps SET plays = %s, '
             'passes = %s WHERE md5 = %s',
             [s.bmap.plays, s.bmap.passes, s.bmap.md5]
         )
 
-    # Update the user.
+    # update their recent score
     s.player.recent_scores[s.mode] = s
     if 'recent_score' in s.player.__dict__:
         del s.player.recent_score  # wipe cached_property
 
-    await s.player.update_stats(s.mode)
-
     """ score submission charts """
 
-    if s.status == SubmissionStatus.FAILED or s.mode >= GameMode.rx_std:
+    if not s.passed or s.mode >= GameMode.rx_std:
         # basically, the osu! client and the way bancho handles this
         # is dumb. if you submit a failed play on bancho, it will
         # still generate the charts and send it to the client, even
@@ -778,7 +823,6 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         # achievements unlocked only for non-restricted players
         if not s.player.restricted:
             if s.bmap.awards_pp:
-                mode_vn = s.mode.as_vanilla
                 player_achs = s.player.achievements[mode_vn]
 
                 for ach in glob.achievements[mode_vn]:
@@ -794,12 +838,6 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         # but it's kinda just something that's probably
         # going to be ugly no matter what i do lol :v
         charts = []
-
-        # these should probably just be abstracted
-        # into a class of some sort so the if/else
-        # part isn't just left in the open like this lol
-        def kv_pair(name: str, k: Optional[Any], v: Any) -> str:
-            return f'{name}Before:{k or ""}|{name}After:{v}'
 
         # append beatmap info chart (#1)
         charts.append(
@@ -817,19 +855,19 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             'chartName:Beatmap Ranking',
 
             *((
-                kv_pair('rank', s.prev_best.rank, s.rank),
-                kv_pair('rankedScore', s.prev_best.score, s.score),
-                kv_pair('totalScore', s.prev_best.score, s.score),
-                kv_pair('maxCombo', s.prev_best.max_combo, s.max_combo),
-                kv_pair('accuracy', round(s.prev_best.acc, 2), round(s.acc, 2)),
-                kv_pair('pp', s.prev_best.pp, s.pp)
+                chart_entry('rank', s.prev_best.rank, s.rank),
+                chart_entry('rankedScore', s.prev_best.score, s.score),
+                chart_entry('totalScore', s.prev_best.score, s.score),
+                chart_entry('maxCombo', s.prev_best.max_combo, s.max_combo),
+                chart_entry('accuracy', round(s.prev_best.acc, 2), round(s.acc, 2)),
+                chart_entry('pp', s.prev_best.pp, s.pp)
             ) if s.prev_best else (
-                kv_pair('rank', None, s.rank),
-                kv_pair('rankedScore', None, s.score),
-                kv_pair('totalScore', None, s.score),
-                kv_pair('maxCombo', None, s.max_combo),
-                kv_pair('accuracy', None, round(s.acc, 2)),
-                kv_pair('pp', None, s.pp)
+                chart_entry('rank', None, s.rank),
+                chart_entry('rankedScore', None, s.score),
+                chart_entry('totalScore', None, s.score),
+                chart_entry('maxCombo', None, s.max_combo),
+                chart_entry('accuracy', None, round(s.acc, 2)),
+                chart_entry('pp', None, s.pp)
             )),
 
             f'onlineScoreId:{s.id}'
@@ -842,20 +880,19 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             'chartName:Overall Ranking',
 
             *((
-                kv_pair('rank', prev_stats.rank, stats.rank),
-                kv_pair('rankedScore', prev_stats.rscore, stats.rscore),
-                kv_pair('totalScore', prev_stats.tscore, stats.tscore),
-                kv_pair('maxCombo', prev_stats.max_combo, stats.max_combo),
-                kv_pair('accuracy', round(prev_stats.acc, 2),
-                        round(stats.acc, 2)),
-                kv_pair('pp', prev_stats.pp, stats.pp),
+                chart_entry('rank', prev_stats.rank, stats.rank),
+                chart_entry('rankedScore', prev_stats.rscore, stats.rscore),
+                chart_entry('totalScore', prev_stats.tscore, stats.tscore),
+                chart_entry('maxCombo', prev_stats.max_combo, stats.max_combo),
+                chart_entry('accuracy', round(prev_stats.acc, 2), round(stats.acc, 2)),
+                chart_entry('pp', prev_stats.pp, stats.pp),
             ) if prev_stats else (
-                kv_pair('rank', None, stats.rank),
-                kv_pair('rankedScore', None, stats.rscore),
-                kv_pair('totalScore', None, stats.tscore),
-                kv_pair('maxCombo', None, stats.max_combo),
-                kv_pair('accuracy', None, round(stats.acc, 2)),
-                kv_pair('pp', None, stats.pp),
+                chart_entry('rank', None, stats.rank),
+                chart_entry('rankedScore', None, stats.rscore),
+                chart_entry('totalScore', None, stats.tscore),
+                chart_entry('maxCombo', None, stats.max_combo),
+                chart_entry('accuracy', None, round(stats.acc, 2)),
+                chart_entry('pp', None, stats.pp),
             )),
 
             f'achievements-new:{"/".join(map(repr, achievements))}'
@@ -2083,6 +2120,7 @@ async def api_get_match(conn: Connection) -> Optional[bytes]:
     # TODO: eventually, this should contain recent score info.
     if not (
         'id' in conn.args and
+        conn.args['id'].isdecimal() and
         0 <= (match_id := int(conn.args['id'])) < 64
     ):
         return (400, b'Must provide valid match id.')

@@ -9,7 +9,6 @@ from enum import IntEnum
 from enum import unique
 from functools import cached_property
 from functools import partial
-from typing import Any
 from typing import Coroutine
 from typing import Optional
 from typing import TYPE_CHECKING
@@ -119,7 +118,7 @@ class Player:
     pres_filter: `PresenceFilter`
         The scope of users the client can currently see.
 
-    menu_options: `dict[int, dict[str, Any]]`
+    menu_options: `dict[int, dict[str, object]]`
         The current osu! chat menu options available to the player.
         XXX: These may eventually have a timeout.
 
@@ -217,7 +216,7 @@ class Player:
         }
 
         # {id: {'callback', func, 'timeout': unixt, 'reusable': False}, ...}
-        self.menu_options: dict[int, dict[str, Any]] = {}
+        self.menu_options: dict[int, dict[str, object]] = {}
 
         # subject to possible change in the future,
         # although if anything, bot accounts will
@@ -773,7 +772,11 @@ class Player:
             status, *lines = (await resp.text()).split('\n')
 
             if status != 'success':
-                log(f'Failed to get geoloc data: {lines[0]}.', Ansi.LRED)
+                err_msg = lines[0]
+                if err_msg == 'invalid query':
+                    err_msg += f' ({url})'
+
+                log(f'Failed to get geoloc data: {err_msg}.', Ansi.LRED)
                 return
 
         country = await glob.db.fetch (
@@ -795,66 +798,6 @@ class Player:
         )
 
         self.achievements[a.mode].add(a)
-
-    async def update_stats(self, mode: GameMode = GameMode.vn_std) -> None:
-        """Update a player's stats in-game and in sql."""
-        table = mode.sql_table
-
-        res = await glob.db.fetchall(
-            f'SELECT s.pp, s.acc FROM {table} s '
-            'INNER JOIN maps m ON s.map_md5 = m.md5 '
-            'WHERE s.userid = %s AND s.mode = %s '
-            'AND s.status = 2 AND m.status IN (2, 3) '
-            'ORDER BY s.pp DESC LIMIT 100',
-            [self.id, mode.as_vanilla]
-        )
-
-        if not res:
-            return # ?
-
-        stats = self.stats[mode]
-
-        # increment playcount
-        stats.plays += 1
-
-        # calculate avg acc based on top 100 scores
-        tot = div = 0
-        for i, row in enumerate(res):
-            add = int((0.95 ** i) * 100)
-            tot += row['acc'] * add
-            div += add
-
-        stats.acc = tot / div
-
-        # calculate weighted pp based on top 100 scores
-        stats.pp = round(sum([row['pp'] * 0.95 ** i
-                              for i, row in enumerate(res)]))
-
-        # keep stats up to date in sql
-        await glob.db.execute(
-            'UPDATE stats SET pp_{0:sql} = %s, '
-            'plays_{0:sql} = plays_{0:sql} + 1, '
-            'acc_{0:sql} = %s WHERE id = %s'.format(mode),
-            [stats.pp, stats.acc, self.id]
-        )
-
-        # calculate rank.
-        res = await glob.db.fetch(
-            'SELECT COUNT(*) AS c FROM stats s '
-            'INNER JOIN users u USING(id) '
-            f'WHERE s.pp_{mode:sql} > %s '
-            'AND u.priv & 1',
-            [stats.pp]
-        )
-        res1 = await glob.db.fetch(
-            'SELECT COUNT(*) AS c FROM stats s '
-            'LEFT JOIN users u USING(id) '
-            f'WHERE s.pp_{mode:sql} > %s '
-            'AND u.priv & 1 AND u.country = %s',
-            [stats.pp, self.country[1]]
-        )
-
-        self.enqueue(packets.userStats(self))
 
     async def friends_from_sql(self) -> None:
         """Retrieve `self`'s friends from sql."""
