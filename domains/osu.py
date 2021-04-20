@@ -663,7 +663,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             s.bmap.md5, s.score, s.pp, s.acc, s.max_combo, s.mods,
             s.n300, s.n100, s.n50, s.nmiss, s.ngeki, s.nkatu,
             s.grade, s.status, mode_vn, s.play_time,
-            s.time_elapsed, s.client_flags, s.player.id, s.perfect
+            s.time_elapsed, s.client_flags, s.player.id, s.perfect, 0
         ]
     )
 
