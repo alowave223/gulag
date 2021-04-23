@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import dill as pickle
 import inspect
 import pymysql
 import requests
+import secrets
 import sys
 import types
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Callable
 from typing import Sequence
 from typing import Type
 
+from objects import glob
 from cmyui.logging import Ansi
 from cmyui.logging import log
 from cmyui.logging import printc
@@ -17,46 +20,17 @@ from cmyui.osu.replay import Keys
 from cmyui.osu.replay import ReplayFrame
 
 __all__ = (
-    'point_of_interest',
     'get_press_times',
     'make_safe_name',
     'download_achievement_pngs',
     'seconds_readable',
     'install_excepthook',
+    'get_appropriate_stacktrace',
+    'log_strange_occurrence',
 
     'pymysql_encode',
     'escape_enum'
 )
-
-def point_of_interest():
-    """Leave a pseudo-breakpoint somewhere to ask the user if
-       they could pls submit their stacktrace to cmyui <3."""
-
-    # TODO: fix this, circular import thing
-    #ver_str = f'Running gulag v{glob.version!r} | cmyui_pkg v{cmyui.__version__}'
-    #printc(ver_str, Ansi.LBLUE)
-
-    for fi in inspect.stack()[1:]:
-        if fi.function == '_run':
-            # go all the way up to server start func
-            break
-
-        file = Path(fi.filename)
-
-        # print line num, index, func name & locals for each frame.
-        log('[{function}() @ {fname} L{lineno}:{index}] {frame.f_locals}'.format(
-            **fi._asdict(), fname=file.name
-        ))
-
-    msg_str = '\n'.join((
-        "Hey! If you're seeing this, osu! just did something pretty strange,",
-        "and the gulag devs have left a breakpoint here. We'd really appreciate ",
-        "if you could screenshot the data above, and send it to cmyui, either via ",
-        "Discord (cmyui#0425), or by email (cmyuiosu@gmail.com). Thanks! 😳😳😳"
-    ))
-
-    printc(msg_str, Ansi.LRED)
-    input('To close this menu & unfreeze, simply hit the enter key.')
 
 useful_keys = (Keys.M1, Keys.M2,
                Keys.K1, Keys.K2)
@@ -150,6 +124,59 @@ def install_excepthook():
             'before starting up :(\x1b[0m')
         sys._excepthook(type_, value, traceback)
     sys.excepthook = _excepthook
+
+def get_appropriate_stacktrace() -> list[inspect.FrameInfo]:
+    stack = inspect.stack()[1:]
+    for idx, frame in enumerate(stack):
+        if frame.function == 'run':
+            break
+    else:
+        raise Exception
+
+    return [{
+        'function': frame.function,
+        'filename': Path(frame.filename).name,
+        'lineno': frame.lineno,
+        'charno': frame.index,
+        'locals': {k: repr(v) for k, v in frame.frame.f_locals.items()}
+    } for frame in stack[:idx]]
+
+STRANGE_LOG_DIR = Path.cwd() / '.data/logs'
+async def log_strange_occurrence(obj: object) -> None:
+    pickled_obj = pickle.dumps(obj)
+    uploaded = False
+
+    if glob.config.automatically_report_problems:
+        # automatically reporting problems to cmyui's server
+        async with glob.http.post(
+            url = 'https://log.cmyui.xyz/',
+            headers = {'Gulag-Version': repr(glob.version)},
+            data = pickled_obj,
+        ) as resp:
+            if (
+                resp.status == 200 and
+                (await resp.read()) == b'ok'
+            ):
+                uploaded = True
+                log("Logged strange occurrence to cmyui's server.", Ansi.LBLUE)
+                log("Thank you for your participation! <3", Ansi.LBLUE)
+            else:
+                log(f"Autoupload to cmyui's server failed (HTTP {resp.status})", Ansi.LRED)
+
+    if not uploaded:
+        # log to a file locally, and prompt the user
+        while True:
+            log_file = STRANGE_LOG_DIR / f'strange_{secrets.token_hex(4)}.db'
+            if not log_file.exists():
+                break
+
+        log_file.touch(exist_ok=False)
+        log_file.write_bytes(pickled_obj)
+
+        log('Logged strange occurrence to', Ansi.LYELLOW, end=' ')
+        printc('/'.join(log_file.parts[-4:]), Ansi.LBLUE)
+
+        log("Greatly appreciated if you could forward this to cmyui#0425 :)", Ansi.LYELLOW)
 
 def pymysql_encode(conv: Callable):
     """Decorator to allow for adding to pymysql's encoders."""

@@ -748,7 +748,7 @@ class Player:
 
     async def remove_friend(self, p: 'Player') -> None:
         """Attempt to remove `p` from `self`'s friends."""
-        if not p.id in self.friends:
+        if p.id not in self.friends:
             log(f'{self} tried to remove {p}, who is not their friend!', Ansi.LYELLOW)
             return
 
@@ -761,8 +761,18 @@ class Player:
 
         log(f'{self} removed {p} from their friends.')
 
-    async def fetch_geoloc(self, ip: str) -> None:
-        """Fetch a player's geolocation data based on their ip."""
+    def fetch_geoloc_db(self, ip: str) -> None:
+        """Fetch geolocation data based on ip (using local db)."""
+        res = glob.geoloc_db.city(ip)
+
+        iso_code = res.country.iso_code
+        loc = res.location
+
+        self.country = (country_codes[iso_code], iso_code)
+        self.location = (loc.latitude, loc.longitude)
+
+    async def fetch_geoloc_web(self, ip: str) -> None:
+        """Fetch geolocation data based on ip (using ip-api)."""
         url = f'http://ip-api.com/line/{ip}'
 
         async with glob.http.get(url) as resp:

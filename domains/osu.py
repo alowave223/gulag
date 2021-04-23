@@ -4,6 +4,7 @@ import copy
 import hashlib
 import random
 import re
+import secrets
 import struct
 import time
 import datetime
@@ -28,11 +29,11 @@ from cmyui import Connection
 from cmyui import Domain
 from cmyui import log
 from cmyui import ratelimit
-from cmyui import rstring
 from cmyui.discord import Webhook
 from cmyui.discord import Embed
 
 import packets
+import utils.misc
 from constants import regexes
 from constants.clientflags import ClientFlags
 from constants.gamemodes import GameMode
@@ -44,7 +45,6 @@ from objects.player import Privileges
 from objects.score import Score
 from objects.score import SubmissionStatus
 from utils.misc import escape_enum
-from utils.misc import point_of_interest
 from utils.misc import pymysql_encode
 from utils.recalculator import PPCalculator
 
@@ -162,7 +162,7 @@ async def osuScreenshot(p: 'Player', conn: Connection) -> Optional[bytes]:
         return (400, b'Invalid file type.')
 
     while True:
-        filename = f'{rstring(8)}.{extension}'
+        filename = f'{secrets.token_urlsafe(8)}.{extension}'
         screenshot_file = SCREENSHOTS_PATH / filename
         if not screenshot_file.exists():
             break
@@ -243,9 +243,9 @@ async def osuGetBeatmapInfo(p: 'Player', conn: Connection) -> Optional[bytes]:
         )
 
     for _ in data['Ids']:
-        # still have yet to see
-        # this actually used..
-        point_of_interest()
+        # still have yet to see this actually used..
+        stacktrace = utils.misc.get_appropriate_stacktrace()
+        await utils.misc.log_strange_occurrence(stacktrace)
 
     return '\n'.join(ret).encode()
 
@@ -394,13 +394,15 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
 
     async with glob.http.get(search_url, params=params) as resp:
         if not resp:
-            point_of_interest()
+            stacktrace = utils.misc.get_appropriate_stacktrace()
+            await utils.misc.log_strange_occurrence(stacktrace)
 
         if USING_CHIMU: # error handling varies
             if resp.status == 404:
                 return b'0' # no maps found
             elif resp.status != 200:
-                point_of_interest()
+                stacktrace = utils.misc.get_appropriate_stacktrace()
+                await utils.misc.log_strange_occurrence(stacktrace)
         else: # cheesegull
             if resp.status != 200:
                 return b'Failed to retrieve data from mirror!'
@@ -409,7 +411,8 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
 
         if USING_CHIMU:
             if result['code'] != 0:
-                point_of_interest()
+                stacktrace = utils.misc.get_appropriate_stacktrace()
+                await utils.misc.log_strange_occurrence(stacktrace)
                 return b'Failed to retrieve data from mirror!'
             result = result['data']
 
@@ -572,7 +575,8 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
     score.time_elapsed = int(time_elapsed)
 
     if 'i' in conn.files:
-        point_of_interest()
+        stacktrace = utils.misc.get_appropriate_stacktrace()
+        await utils.misc.log_strange_occurrence(stacktrace)
 
     if not ( # check all players not whitelisted or restricted
         score.player.priv & Privileges.Whitelisted or
@@ -1599,7 +1603,11 @@ async def api_get_player_status(conn: Connection) -> Optional[bytes]:
 
     if not p:
         # no such player online
-        return JSON({'online': False})
+        res = await glob.db.fetch('SELECT latest_activity FROM users WHERE id = %s', [pid])
+        if not res:
+            return (404, b'Player not found.')
+
+        return JSON({'online': False, 'last_seen': res['latest_activity']})
 
     if p.status.map_md5:
         bmap = await Beatmap.from_md5(p.status.map_md5)

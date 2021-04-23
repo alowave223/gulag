@@ -17,6 +17,7 @@ from cmyui import log
 from cmyui.discord import Webhook
 
 import packets
+import utils.misc
 from constants import commands
 from constants import regexes
 from constants.gamemodes import GameMode
@@ -40,7 +41,6 @@ from objects.player import PresenceFilter
 from packets import BanchoPacket
 from packets import BanchoPacketReader
 from packets import Packets
-from utils.misc import make_safe_name
 
 """ Bancho: handle connections from the osu! client """
 
@@ -291,9 +291,12 @@ class Logout(BanchoPacket, type=Packets.OSU_LOGOUT):
     _: osuTypes.i32 # pretty awesome design on osu!'s end :P
 
     async def handle(self, p: Player) -> None:
-        if (time.time() - p.login_time) < 1:
+        if (since_login := time.time() - p.login_time) < 1:
             # osu! has a weird tendency to log out immediately when
             # it logs in, then reconnects? not sure why..?
+            # XXX: will log this so that we can find an ideal time
+            log_msg = f'double login time: {since_login * 1000}ms'
+            await utils.misc.log_strange_occurrence(log_msg)
             return
 
         p.logout()
@@ -428,7 +431,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         'SELECT id, name, priv, pw_bcrypt, '
         'silence_end, clan_id, clan_priv, api_key '
         'FROM users WHERE safe_name = %s',
-        [make_safe_name(username)]
+        [utils.misc.make_safe_name(username)]
     )
 
     if not user_info:
@@ -610,9 +613,12 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     await p.friends_from_sql()
 
     if ip != '127.0.0.1':
-        # update their country data with
-        # the IP from the login request.
-        await p.fetch_geoloc(ip)
+        if glob.geoloc_db is not None:
+            # use local db
+            p.fetch_geoloc_db(ip)
+        else:
+            # use ip-api
+            await p.fetch_geoloc_web(ip)
 
     data += packets.mainMenuIcon()
     data += packets.friendsList(*p.friends)
@@ -911,7 +917,7 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
 @register
 class LobbyPart(BanchoPacket, type=Packets.OSU_PART_LOBBY):
     async def handle(self, p: Player) -> None:
-        p.in_lobby=False
+        p.in_lobby = False
 
 @register
 class LobbyJoin(BanchoPacket, type=Packets.OSU_JOIN_LOBBY):

@@ -8,7 +8,8 @@
 # osu!'s built-in registration.
 # certificate: https://akatsuki.pw/static/ca.crt
 
-__import__('utils.misc', fromlist=[None]).install_excepthook()
+import utils.misc
+utils.misc.install_excepthook()
 
 import os
 import sys
@@ -18,6 +19,7 @@ import aiohttp
 import cmyui
 import datadog
 import orjson # go zoom
+import geoip2.database
 from cmyui import Ansi
 from cmyui import log
 
@@ -31,7 +33,6 @@ from objects.collections import ChannelList
 from objects.collections import ClanList
 from objects.collections import MapPoolList
 from objects.player import Player
-from utils.misc import download_achievement_pngs
 from utils.updater import Updater
 
 __all__ = ()
@@ -39,7 +40,9 @@ __all__ = ()
 # current version of gulag
 # NOTE: this is used internally for the updater, it may be
 # worth reading through it's code before playing with it.
-glob.version = cmyui.Version(3, 2, 6)
+glob.version = cmyui.Version(3, 2, 8)
+
+GEOLOC_DB_FILE = Path.cwd() / 'ext/GeoLite2-City.mmdb'
 
 async def setup_collections() -> None:
     """Setup & cache many global collections (mostly from sql)."""
@@ -51,10 +54,13 @@ async def setup_collections() -> None:
     glob.pools = await MapPoolList.prepare() # active mappools
 
     # create our bot & append it to the global player list.
-    res = await glob.db.fetch('SELECT name FROM users WHERE id = 1')
+    bot_name = (await glob.db.fetch(
+        'SELECT name FROM users '
+        'WHERE id = 1', _dict=False
+    ))[0]
 
     glob.bot = Player(
-        id = 1, name = res['name'], priv = Privileges.Normal,
+        id = 1, name = bot_name, priv = Privileges.Normal,
         login_time = float(0x7fffffff), # never auto-dc
         bot_client = True
     )
@@ -95,6 +101,13 @@ async def before_serving() -> None:
     await updater.run()
     await updater.log_startup()
 
+    # open a connection to our local geoloc database,
+    # if the database file is present.
+    if GEOLOC_DB_FILE.exists():
+        glob.geoloc_db = geoip2.database.Reader(str(GEOLOC_DB_FILE))
+    else:
+        glob.geoloc_db = None
+
     # cache many global collections/objects from sql,
     # such as channels, mappools, clans, bot, etc.
     await setup_collections()
@@ -127,9 +140,24 @@ async def after_serving() -> None:
     if hasattr(glob, 'db') and glob.db.pool is not None:
         await glob.db.close()
 
+    if hasattr(glob, 'geoloc_db') and glob.geoloc_db is not None:
+        glob.geoloc_db.close()
+
     if hasattr(glob, 'datadog') and glob.datadog is not None:
         glob.datadog.stop() # stop thread
         glob.datadog.flush() # flush any leftover
+
+def detect_mysqld_running() -> None:
+    for path in (
+        '/var/run/mysqld/mysqld.pid',
+        '/var/run/mariadb/mariadb.pid'
+    ):
+        if os.path.exists(path):
+            # path found
+            return True
+    else:
+        # not found, try pgrep
+        return os.system('pgrep mysqld') == 0
 
 if __name__ == '__main__':
     # attempt to start up gulag.
@@ -140,7 +168,7 @@ if __name__ == '__main__':
     # make sure nginx & mysqld are running.
     if (
         glob.config.mysql['host'] in ('localhost', '127.0.0.1') and
-        not os.path.exists('/var/run/mysqld/mysqld.pid')
+        not detect_mysqld_running()
     ):
         sys.exit('Please start your mysqld server.')
 
@@ -171,7 +199,7 @@ if __name__ == '__main__':
     if not achievements_path.exists():
         # create directory & download achievement pngs
         achievements_path.mkdir(parents=True)
-        download_achievement_pngs(achievements_path)
+        utils.misc.download_achievement_pngs(achievements_path)
 
     # make sure oppai-ng is built and ready.
     glob.oppai_built = (Path.cwd() / 'oppai-ng/oppai').exists()
