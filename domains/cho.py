@@ -311,7 +311,7 @@ class StatsUpdateRequest(BanchoPacket, type=Packets.OSU_REQUEST_STATUS_UPDATE):
 WELCOME_MSG = '\n'.join((
     f"Welcome to {BASE_DOMAIN}.",
     "To see a list of commands, use !help.",
-    "We have a public (Discord)[ttps://discord.gg/N7NVbrJDcx]!",
+    "We have a public (Discord)[https://discord.gg/N7NVbrJDcx]!",
     "Enjoy the server!"
 ))
 
