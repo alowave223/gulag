@@ -5,6 +5,7 @@ import hashlib
 import random
 import re
 import secrets
+import string
 import struct
 import time
 import datetime
@@ -161,8 +162,11 @@ async def osuScreenshot(p: 'Player', conn: Connection) -> Optional[bytes]:
     else:
         return (400, b'Invalid file type.')
 
+    letters = string.ascii_letters + string.digits
+    
     while True:
-        filename = f'{secrets.token_urlsafe(8)}.{extension}'
+        tok = ''.join(random.choice(letters) for i in range(8))
+        filename = f'{tok}.{extension}'
         screenshot_file = SCREENSHOTS_PATH / filename
         if not screenshot_file.exists():
             break
