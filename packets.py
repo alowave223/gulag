@@ -14,6 +14,7 @@ from functools import cache
 from functools import lru_cache
 from functools import partialmethod
 from typing import Optional
+from typing import Sequence
 from typing import TYPE_CHECKING
 
 from constants.gamemodes import GameMode
@@ -54,7 +55,7 @@ class Packets(IntEnum):
     CHO_USER_ID = 5
     CHO_SEND_MESSAGE = 7
     CHO_PONG = 8
-    CHO_HANDLE_IRC_CHANGE_USERNAME = 9
+    CHO_HANDLE_IRC_CHANGE_USERNAME = 9 # unused
     CHO_HANDLE_IRC_QUIT = 10
     CHO_USER_STATS = 11
     CHO_USER_LOGOUT = 12
@@ -479,7 +480,7 @@ def write_string(s: str) -> bytearray:
 
     return ret
 
-def write_i32_list(l: tuple[int, ...]) -> bytearray:
+def write_i32_list(l: Sequence[int]) -> bytearray:
     """ Write `l` into bytes (int32 list). """
     ret = bytearray(len(l).to_bytes(2, 'little'))
 
@@ -563,7 +564,7 @@ def write_scoreframe(s: ScoreFrame) -> bytearray:
         s.max_combo, s.perfect, s.current_hp, s.tag_byte, s.score_v2
     ))
 
-def write(packid: int, *args: tuple[object, ...]) -> bytes:
+def write(packid: int, *args: Sequence[object]) -> bytes:
     """ Write `args` into bytes. """
     ret = bytearray(struct.pack('<Hx', packid))
 
@@ -628,6 +629,7 @@ def pong() -> bytes:
     return write(Packets.CHO_PONG)
 
 # packet id: 9
+# NOTE: deprecated
 def changeUsername(old: str, new: str) -> bytes:
     return write(
         Packets.CHO_HANDLE_IRC_CHANGE_USERNAME,

@@ -6,14 +6,15 @@ import time
 from datetime import datetime as dt
 from datetime import timedelta as td
 from typing import Callable
+from typing import Union
 
 import bcrypt
-from cmyui import _isdecimal
-from cmyui import Ansi
-from cmyui import AnsiRGB
 from cmyui import Connection
 from cmyui import Domain
-from cmyui import log
+from cmyui.logging import log
+from cmyui.logging import Ansi
+from cmyui.logging import AnsiRGB
+from cmyui.utils import _isdecimal
 from cmyui.discord import Webhook
 
 import packets
@@ -63,10 +64,14 @@ async def bancho_http_handler(conn: Connection) -> bytes:
 
 @domain.route('/', methods=['POST'])
 async def bancho_handler(conn: Connection) -> bytes:
+    ip = conn.headers['X-Real-IP']
+
     if (
         'User-Agent' not in conn.headers or
         conn.headers['User-Agent'] != 'osu!'
     ):
+        url = f'{conn.cmd} {conn.headers["Host"]}{conn.path}'
+        log(f'[{ip}] {url} missing user-agent.', Ansi.LRED)
         return
 
     # check for 'osu-token' in the headers.
@@ -76,9 +81,7 @@ async def bancho_handler(conn: Connection) -> bytes:
         # login is a bit of a special case,
         # so we'll handle it separately.
         async with glob.players._lock:
-            resp, token = await login(
-                conn.body, conn.headers['X-Real-IP']
-            )
+            resp, token = await login(conn.body, ip)
 
         conn.resp_headers['cho-token'] = token
         return resp
@@ -126,7 +129,7 @@ glob.bancho_packets = {
     'restricted': {}
 }
 
-def register(restricted: bool = False) -> Callable:
+def register(restricted: Union[bool, Callable] = False) -> Callable:
     """Register a handler in `glob.bancho_packets`."""
     def wrapper(cls: BanchoPacket) -> Callable:
         new_entry = {cls.type: cls}
@@ -137,8 +140,8 @@ def register(restricted: bool = False) -> Callable:
         return cls
 
     if callable(restricted):
-        _cls, restricted = restricted, False
         # packet class passed right in
+        _cls, restricted = restricted, False
         return wrapper(_cls)
     return wrapper
 
@@ -188,7 +191,9 @@ class SendMessage(BanchoPacket, type=Packets.OSU_SEND_PUBLIC_MESSAGE):
         msg = self.msg.msg.strip()
         recipient = self.msg.recipient
 
-        if recipient == '#spectator':
+        if recipient == '#highlight':
+            return
+        elif recipient == '#spectator':
             if p.spectating:
                 # we are spectating someone
                 spec_id = p.spectating.id
@@ -291,18 +296,15 @@ class Logout(BanchoPacket, type=Packets.OSU_LOGOUT):
     _: osuTypes.i32 # pretty awesome design on osu!'s end :P
 
     async def handle(self, p: Player) -> None:
-        if (since_login := time.time() - p.login_time) < 1:
-            # osu! has a weird tendency to log out immediately when
-            # it logs in, then reconnects? not sure why..?
-            # XXX: will log this so that we can find an ideal time
-            log_msg = f'double login time: {since_login * 1000}ms'
-            await utils.misc.log_strange_occurrence(log_msg)
+        if (time.time() - p.login_time) < 1:
+            # osu! has a weird tendency to log out immediately after login.
+            # i've tested the times and they're generally 300-800ms, so
+            # we'll block any logout request within 1 second from login.
             return
 
         p.logout()
 
         await p.update_latest_activity()
-        log(f'{p} logged out.', Ansi.LYELLOW)
 
 @register(restricted=True)
 class StatsUpdateRequest(BanchoPacket, type=Packets.OSU_REQUEST_STATUS_UPDATE):
@@ -324,7 +326,7 @@ RESTRICTED_MSG = (
     'greater than 1 months, you may appeal via the form on the [site](https://sakuru.pw/doc/appeal).'
 )
 
-async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
+async def login(body: bytes, ip: str) -> tuple[bytes, str]:
     """\
     Login has no specific packet, but happens when the osu!
     client sends a request without an 'osu-token' header.
@@ -351,7 +353,8 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
     """ Parse data and verify the request is legitimate. """
 
-    if len(split := origin.decode().split('\n')[:-1]) != 3:
+    if len(split := body.decode().split('\n')[:-1]) != 3:
+        log(f'Invalid login request from {ip}.', Ansi.LRED)
         return # invalid request
 
     username = split[0]
@@ -360,25 +363,27 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     if len(client_info := split[2].split('|')) != 5:
         return # invalid request
 
-    if not (r := regexes.osu_ver.match(client_info[0])):
+    osu_ver_str = client_info[0]
+
+    if not (r := regexes.osu_ver.match(osu_ver_str)):
         return # invalid request
 
     # quite a bit faster than using dt.strptime.
-    osu_ver = dt(
+    osu_ver_dt = dt(
         year = int(r['ver'][0:4]),
         month = int(r['ver'][4:6]),
         day = int(r['ver'][6:8])
     )
 
-    tourney_client = r['stream'] == 'tourney'
+    osu_ver_stream = r['stream'] or 'stable'
+    using_tourney_client = osu_ver_stream == 'tourney'
 
     # disallow the login if their osu! client is older
     # than two months old, forcing an update re-check.
     # NOTE: this is disabled on debug since older clients
     #       can sometimes be quite useful when testing.
     if not glob.app.debug:
-        if osu_ver < (dt.now() - td(60)):
-            log(f'User {username} tried to login with old version of osu! ({r["ver"]})', Ansi.LRED)
+        if osu_ver_dt < (dt.now() - td(60)):
             return (packets.versionUpdateForced() +
                     packets.userID(-2)), 'no'
 
@@ -400,7 +405,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         log(f'User {username} tried to login with bad client_hashes', Ansi.LRED)
         return # invalid request
 
-    client_hashes.pop(1) # no need for non-md5 adapters
+    is_wine = client_hashes.pop(1) == 'runningunderwine'
 
     pm_private = client_info[4] == '1'
 
@@ -408,7 +413,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
     login_time = time.time()
 
-    if not tourney_client:
+    if not using_tourney_client:
         # Check if the player is already online
         if (
             (p := glob.players.get(name=username)) and
@@ -436,14 +441,15 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
     if not user_info:
         # no account by this name exists.
-        log(f'User {username} tried to login but his account doesn\'t exists.', Ansi.LRED)
-        return packets.userID(-1), 'no'
-
-    tourney_privs = int(Privileges.Normal | Privileges.Donator)
+        return (packets.notification(f'{BASE_DOMAIN}: Unknown username') +
+                packets.userID(-1)), 'no'
 
     if (
-        tourney_client and
-        not user_info['priv'] & tourney_privs == tourney_privs
+        using_tourney_client and
+        not (
+            user_info['priv'] & Privileges.Donator and
+            user_info['priv'] & Privileges.Normal
+        )
     ):
         # trying to use tourney client with insufficient privileges.
         return packets.userID(-1), 'no'
@@ -459,18 +465,24 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     # results to speed up subsequent logins.
     if pw_bcrypt in bcrypt_cache: # ~0.01 ms
         if pw_md5 != bcrypt_cache[pw_bcrypt]:
-            log(f'User {username} tried to login but his password was incorrect (cached)', Ansi.LRED)
-            return packets.userID(-1), 'no'
+            return (packets.notification(f'{BASE_DOMAIN}: Incorrect login') +
+                    packets.userID(-1)), 'no'
     else: # ~200ms
         if not bcrypt.checkpw(pw_md5, pw_bcrypt):
-            log(f'User {username} tried to login but his password was incorrect (decoded)', Ansi.LRED)
-            return packets.userID(-1), 'no'
+            return (packets.notification(f'{BASE_DOMAIN}: Incorrect login') +
+                    packets.userID(-1)), 'no'
 
         bcrypt_cache[pw_bcrypt] = pw_md5
 
-    """ handle client hashes """
+    """ login credentials verified """
 
-    # insert new set/occurrence.
+    await glob.db.execute(
+        'INSERT INTO ingame_logins '
+        '(userid, ip, osu_ver, osu_stream, datetime) '
+        'VALUES (%s, %s, %s, %s, NOW())',
+        [user_info['id'], ip, osu_ver_dt, osu_ver_stream]
+    )
+
     await glob.db.execute(
         'INSERT INTO client_hashes '
         '(userid, osupath, adapters, uninstall_id,'
@@ -482,65 +494,69 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
         [user_info['id'], *client_hashes]
     )
 
-    # TODO: runningunderwine support
+    if not is_wine:
+        # find any other users from any of the same hwid values.
+        hwid_matches = await glob.db.fetchall(
+            'SELECT u.name, u.priv, h.occurrences '
+            'FROM client_hashes h '
+            'INNER JOIN users u ON h.userid = u.id '
+            'WHERE h.userid != %s AND (h.adapters = %s '
+            'OR h.uninstall_id = %s OR h.disk_serial = %s)',
+            [user_info['id'], *client_hashes[1:]]
+        )
 
-    # find any other users from any of the same hwid values.
-    hwid_matches = await glob.db.fetchall(
-        'SELECT u.name, u.priv, h.occurrences '
-        'FROM client_hashes h '
-        'INNER JOIN users u ON h.userid = u.id '
-        'WHERE h.userid != %s AND (h.adapters = %s '
-        'OR h.uninstall_id = %s OR h.disk_serial = %s)',
-        [user_info['id'], *client_hashes[1:]]
-    )
+        if hwid_matches:
+            # we have other accounts with matching hashes
 
-    if hwid_matches:
-        # we have other accounts with matching hashes
+            # NOTE: this is an area i've seen a lot of implementations rush
+            # through and poorly design; this section is CRITICAL for both
+            # keeping multiaccounting down, but perhaps more importantly in
+            # scenarios where multiple users are forced to use a single pc
+            # (lan meetups, at a friends place, shared computer, etc.).
+            # these scenarios are usually the ones where new players will
+            # get invited to your server.. first impressions are important
+            # and you don't want a ban and support ticket to be this users
+            # first experience. :P
 
-        # NOTE: this is an area i've seen a lot of implementations rush
-        # through and poorly design; this section is CRITICAL for both
-        # keeping multiaccounting down, but perhaps more importantly in
-        # scenarios where multiple users are forced to use a single pc
-        # (lan meetups, at a friends place, shared computer, etc.).
-        # these scenarios are usually the ones where new players will
-        # get invited to your server.. first impressions are important
-        # and you don't want a ban and support ticket to be this users
-        # first experience. :P
+            # anyways yeah needless to say i'm gonna think about this one
 
-        # anyways yeah needless to say i'm gonna think about this one
+            if not user_info['priv'] & Privileges.Verified:
+                # this player is not verified yet, this is their first
+                # time connecting in-game and submitting their hwid set.
+                # we will not allow any banned matches; if there are any,
+                # then ask the user to contact staff and resolve manually.
+                if not all([x['priv'] & Privileges.Normal for x in hwid_matches]):
+                    return (packets.notification('Please contact staff directly '
+                                                'to create an account.') +
+                            packets.userID(-1)), 'no'
 
-        if not user_info['priv'] & Privileges.Verified:
-            # this player is not verified yet, this is their first
-            # time connecting in-game and submitting their hwid set.
-            # we will not allow any banned matches; if there are any,
-            # then ask the user to contact staff and resolve manually.
-            if not all([x['priv'] & Privileges.Normal for x in hwid_matches]):
-                log('Hwid bruh', Ansi.RED)
+            else:
+                # player is verified
+                # TODO: discord webhook?
+                # TODO: staff hwid locking & bypass detections.
+                unique_players = set()
+                total_occurrences = 0
+                for match in hwid_matches:
+                    if match['name'] not in unique_players:
+                        unique_players.add(match['name'])
+                    total_occurrences += match['occurrences']
 
-        else:
-            # player is verified
-            # TODO: discord webhook?
-            # TODO: staff hwid locking & bypass detections.
-            unique_players = set()
-            total_occurrences = 0
-            for match in hwid_matches:
-                if match['name'] not in unique_players:
-                    unique_players.add(match['name'])
-                total_occurrences += match['occurrences']
+                msg_content = (
+                    f'{username} logged in with HWID matches '
+                    f'from {len(unique_players)} other users. '
+                    f'({total_occurrences} total occurrences)'
+                )
 
-            msg_content = (
-                f'{username} logged in with HWID matches '
-                f'from {len(unique_players)} other users. '
-                f'({total_occurrences} total occurrences)'
-            )
+                if webhook_url := glob.config.webhooks['audit-log']:
+                    # TODO: make it look nicer lol.. very basic
+                    webhook = Webhook(url=webhook_url)
+                    webhook.content = msg_content
+                    await webhook.post(glob.http)
 
-            if webhook_url := glob.config.webhooks['surveillance']:
-                # TODO: make it look nicer lol.. very basic
-                webhook = Webhook(url=webhook_url)
-                webhook.content = msg_content
-                await webhook.post(glob.http)
-
-            log(msg_content, Ansi.LRED)
+                log(msg_content, Ansi.LRED)
+    else:
+        # TODO: alternative checks for runningunderwine
+        ...
 
     # get clan & clan priv if we're in a clan
     if user_info['clan_id'] != 0:
@@ -553,12 +569,12 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
     extras = {
         'utc_offset': utc_offset,
-        'osu_ver': osu_ver,
+        'osu_ver': osu_ver_dt,
         'pm_private': pm_private,
         'login_time': login_time,
         'clan': clan,
         'clan_priv': clan_priv,
-        'tourney_client': tourney_client
+        'tourney_client': using_tourney_client
     }
 
     p = Player(
@@ -610,7 +626,7 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
     # information from sql to be cached.
     await p.achievements_from_sql()
     await p.stats_from_sql_full()
-    await p.friends_from_sql()
+    await p.relationships_from_sql()
 
     if ip != '127.0.0.1':
         if glob.geoloc_db is not None:
@@ -645,20 +661,32 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
         # the player may have been sent mail while offline,
         # enqueue any messages from their respective authors.
-        # (thanks osu for doing this by name rather than id very cool)
-        query = ('SELECT m.`msg`, m.`time`, m.`from_id`, '
-                '(SELECT name FROM users WHERE id = m.`from_id`) AS `from`, '
-                '(SELECT name FROM users WHERE id = m.`to_id`) AS `to` '
-                'FROM `mail` m WHERE m.`to_id` = %s AND m.`read` = 0')
+        res = await glob.db.fetchall(
+            'SELECT m.`msg`, m.`time`, m.`from_id`, '
+            '(SELECT name FROM users WHERE id = m.`from_id`) AS `from`, '
+            '(SELECT name FROM users WHERE id = m.`to_id`) AS `to` '
+            'FROM `mail` m WHERE m.`to_id` = %s AND m.`read` = 0',
+            [p.id]
+        )
 
-        for msg in await glob.db.fetchall(query, [p.id]):
-            msg_time = dt.fromtimestamp(msg['time'])
-            msg_ts = f'[{msg_time:%a %b %d @ %H:%M%p}] {msg["msg"]}'
+        if res:
+            sent_to = set() # ids
 
-            data += packets.sendMessage(
-                sender=msg['from'], msg=msg_ts,
-                recipient=msg['to'], sender_id=msg['from_id']
-            )
+            for msg in res:
+                if msg['from'] not in sent_to:
+                    packets.sendMessage(
+                        sender=msg['from'], msg='Mail received while offline.',
+                        recipient=msg['to'], sender_id=msg['from_id']
+                    )
+                    sent_to.add(msg['from'])
+
+                msg_time = dt.fromtimestamp(msg['time'])
+                msg_ts = f'[{msg_time:%a %b %d @ %H:%M%p}] {msg["msg"]}'
+
+                data += packets.sendMessage(
+                    sender=msg['from'], msg=msg_ts,
+                    recipient=msg['to'], sender_id=msg['from_id']
+                )
 
         if not p.priv & Privileges.Verified:
             # this is the player's first login, verify their
@@ -709,7 +737,9 @@ async def login(origin: bytes, ip: str) -> tuple[bytes, str]:
 
     p._queue.clear() # TODO: this is pretty suboptimal
 
-    log(f'{p} logged in.', Ansi.LCYAN)
+    user_os = 'unix (wine)' if is_wine else 'win32'
+    log(f'{p} logged in with {osu_ver_str} on {user_os}.', Ansi.LCYAN)
+
     await p.update_latest_activity()
     return bytes(data), p.token
 
@@ -723,6 +753,11 @@ class StartSpectating(BanchoPacket, type=Packets.OSU_START_SPECTATING):
             return
 
         if current_host := p.spectating:
+            if current_host == new_host:
+                # client asking to spec when already
+                # speccing, likely downloaded new map.
+                return
+
             current_host.remove_spectator(p)
 
         new_host.add_spectator(p)
@@ -775,7 +810,8 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
 
     async def handle(self, p: Player) -> None:
         if p.silenced:
-            log(f'{p} tried to send a dm while silenced.', Ansi.LYELLOW)
+            if glob.app.debug:
+                log(f'{p} tried to send a dm while silenced.', Ansi.LYELLOW)
             return
 
         # remove leading/trailing whitespace
@@ -785,18 +821,30 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
         # allow this to get from sql - players can receive
         # messages offline, due to the mail system. B)
         if not (t := await glob.players.get_ensure(name=t_name)):
-            log(f'{p} tried to write to non-existent user {t_name}.', Ansi.LYELLOW)
+            if glob.app.debug:
+                log(f'{p} tried to write to non-existent user {t_name}.', Ansi.LYELLOW)
+            return
+
+        if p.id in t.blocks:
+            p.enqueue(packets.userDMBlocked(t_name))
+
+            if glob.app.debug:
+                log(f'{p} tried to message {t}, but they have them blocked.')
             return
 
         if t.pm_private and p.id not in t.friends:
             p.enqueue(packets.userDMBlocked(t_name))
-            log(f'{p} tried to message {t}, but they are blocking dms.')
+
+            if glob.app.debug:
+                log(f'{p} tried to message {t}, but they are blocking dms.')
             return
 
         if t.silenced:
             # if target is silenced, inform player.
             p.enqueue(packets.targetSilenced(t_name))
-            log(f'{p} tried to message {t}, but they are silenced.')
+
+            if glob.app.debug:
+                log(f'{p} tried to message {t}, but they are silenced.')
             return
 
         # limit message length to 2k chars
@@ -848,9 +896,7 @@ class SendPrivateMessage(BanchoPacket, type=Packets.OSU_SEND_PRIVATE_MESSAGE):
                         }
 
                         # calc pp if possible
-                        if mode_vn in (0, 1) and not glob.oppai_built:
-                            msg = 'No oppai-ng binary was found at startup.'
-                        elif mode_vn == 2: # TODO: catch
+                        if mode_vn == 2: # TODO: catch
                             msg = 'PP not yet supported for that mode.'
                         elif mode_vn == 3 and bmap.mode.as_vanilla != 3:
                             msg = 'Mania converts not yet supported.'
@@ -924,8 +970,9 @@ class LobbyJoin(BanchoPacket, type=Packets.OSU_JOIN_LOBBY):
     async def handle(self, p: Player) -> None:
         p.in_lobby = True
 
-        for m in [_m for _m in glob.matches if _m]:
-            p.enqueue(packets.newMatch(m))
+        for m in glob.matches:
+            if m is not None:
+                p.enqueue(packets.newMatch(m))
 
 @register
 class MatchCreate(BanchoPacket, type=Packets.OSU_CREATE_MATCH):
@@ -933,6 +980,15 @@ class MatchCreate(BanchoPacket, type=Packets.OSU_CREATE_MATCH):
 
     async def handle(self, p: Player) -> None:
         # TODO: match validation..?
+        if p.restricted:
+            p.enqueue(
+                packets.matchJoinFail() +
+                packets.notification(
+                    'Multiplayer is not available while restricted.'
+                )
+            )
+            return
+
         if p.silenced:
             p.enqueue(
                 packets.matchJoinFail() +
@@ -963,6 +1019,8 @@ class MatchCreate(BanchoPacket, type=Packets.OSU_CREATE_MATCH):
 
         await p.update_latest_activity()
         p.join_match(self.match, self.match.passwd)
+
+        self.match.chat.send_bot(f'Match created by {p.name}.')
         log(f'{p} created a new multiplayer match.')
 
 async def check_menu_option(p: Player, key: int):
@@ -999,6 +1057,15 @@ class MatchJoin(BanchoPacket, type=Packets.OSU_JOIN_MATCH):
         if not (m := glob.matches[self.match_id]):
             log(f'{p} tried to join a non-existant mp lobby?')
             p.enqueue(packets.matchJoinFail())
+            return
+
+        if p.restricted:
+            p.enqueue(
+                packets.matchJoinFail() +
+                packets.notification(
+                    'Multiplayer is not available while restricted.'
+                )
+            )
             return
 
         if p.silenced:
@@ -1122,7 +1189,8 @@ class MatchChangeSettings(BanchoPacket, type=Packets.OSU_MATCH_CHANGE_SETTINGS):
         if self.new.map_id == -1:
             # map being changed, unready players.
             m.unready_players(expected=SlotStatus.ready)
-        elif m.map_id == -1:
+            m.prev_map_id = m.map_id
+        elif m.map_id == -1 and m.prev_map_id != self.new.map_id:
             # new map has been chosen, send to match chat.
             m.chat.send_bot(f'Selected: {self.new.map_embed}.')
 
@@ -1352,6 +1420,9 @@ class ChannelJoin(BanchoPacket, type=Packets.OSU_CHANNEL_JOIN):
     name: osuTypes.string
 
     async def handle(self, p: Player) -> None:
+        if self.name == '#highlight':
+            return
+
         c = glob.channels[self.name]
 
         if not c or not p.join_channel(c):
@@ -1412,8 +1483,10 @@ class TourneyMatchJoinChannel(BanchoPacket, type=Packets.OSU_TOURNAMENT_JOIN_MAT
         if not (m := glob.matches[self.match_id]):
             return # match not found
 
-        if p.id in [s.player.id for s in m.slots]:
-            return # playing in the match
+        for s in m.slots:
+            if s.player is not None:
+                if p.id == s.player.id:
+                    return # playing in the match
 
         # attempt to join match chan
         if p.join_channel(m.chat):
@@ -1446,10 +1519,11 @@ class FriendAdd(BanchoPacket, type=Packets.OSU_FRIEND_ADD):
             log(f'{p} tried to add a user who is not online! ({self.user_id})')
             return
 
-        if t.id == 1:
-            # you cannot add the bot as a friend since it's already
-            # your friend :]
+        if t is glob.bot:
             return
+
+        if t.id in p.blocks:
+            p.blocks.remove(t.id)
 
         await p.update_latest_activity()
         await p.add_friend(t)
@@ -1463,9 +1537,7 @@ class FriendRemove(BanchoPacket, type=Packets.OSU_FRIEND_REMOVE):
             log(f'{p} tried to remove a user who is not online! ({self.user_id})')
             return
 
-        if t.id == 1:
-            # you cannot remove the bot as a friend because it wont
-            # like that >:[
+        if t is glob.bot:
             return
 
         await p.update_latest_activity()
@@ -1491,6 +1563,9 @@ class ChannelPart(BanchoPacket, type=Packets.OSU_CHANNEL_PART):
     name: osuTypes.string
 
     async def handle(self, p: Player) -> None:
+        if self.name == '#highlight':
+            return
+
         c = glob.channels[self.name]
 
         if not c:
@@ -1545,7 +1620,8 @@ class MatchInvite(BanchoPacket, type=Packets.OSU_MATCH_INVITE):
         if not (t := glob.players.get(id=self.user_id)):
             log(f'{p} tried to invite a user who is not online! ({self.user_id})')
             return
-        elif t is glob.bot:
+
+        if t is glob.bot:
             p.send_bot("I'm too busy!")
             return
 

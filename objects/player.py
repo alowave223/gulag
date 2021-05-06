@@ -14,8 +14,9 @@ from typing import Optional
 from typing import TYPE_CHECKING
 from typing import Union
 
-from cmyui import Ansi
-from cmyui import log
+from cmyui.logging import Ansi
+from cmyui.logging import log
+from cmyui.discord import Webhook
 
 import packets
 from constants.countries import country_codes
@@ -137,7 +138,7 @@ class Player:
     """
     __slots__ = (
         'token', 'id', 'name', 'safe_name', 'pw_bcrypt',
-        'priv', 'stats', 'status', 'friends', 'channels',
+        'priv', 'stats', 'status', 'friends', 'blocks', 'channels',
         'spectators', 'spectating', 'match', 'stealth',
         'clan', 'clan_priv', 'achievements',
         'recent_scores', 'last_np', 'country', 'location',
@@ -173,7 +174,10 @@ class Player:
         self.stats: dict[GameMode, ModeData] = {}
         self.status = Status()
 
-        self.friends: set[int] = set() # userids, not player objects
+        # userids, not player objects
+        self.friends: set[int] = set()
+        self.blocks: set[int] = set()
+
         self.channels: list[Channel] = []
         self.spectators: list[Player] = []
         self.spectating: Optional[Player] = None
@@ -358,7 +362,7 @@ class Player:
 
         # leave channels
         while self.channels:
-            self.leave_channel(self.channels[0])
+            self.leave_channel(self.channels[0], kick=False)
 
         # remove from playerlist and
         # enqueue logout to all users.
@@ -369,6 +373,8 @@ class Player:
                 glob.datadog.decrement('gulag.online_players')
 
             glob.players.enqueue(packets.logout(self.id))
+
+        log(f'{self} logged out.', Ansi.LYELLOW)
 
     async def update_privs(self, new: Privileges) -> None:
         """Update `self`'s privileges to `new`."""
@@ -424,15 +430,21 @@ class Player:
             [admin.id, self.id, log_msg]
         )
 
+        if 'restricted' in self.__dict__:
+            del self.restricted # wipe cached_property
+
+        log_msg = f'{admin} restricted {self} for: {reason}.'
+
+        log(log_msg, Ansi.LRED)
+
+        if webhook_url := glob.config.webhooks['audit-log']:
+            webhook = Webhook(webhook_url, content=log_msg)
+            await webhook.post(glob.http)
+
         if self.online:
             # log the user out if they're offline, this
             # will simply relog them and refresh their state.
             self.logout()
-
-        if 'restricted' in self.__dict__:
-            del self.restricted # wipe cached_property
-
-        log(f'Restrict {self}.', Ansi.LCYAN)
 
     async def unrestrict(self, admin: 'Player', reason: str) -> None:
         """Restrict `self` for `reason`, and log to sql."""
@@ -446,15 +458,21 @@ class Player:
             [admin.id, self.id, log_msg]
         )
 
+        if 'restricted' in self.__dict__:
+            del self.restricted # wipe cached_property
+
+        log_msg = f'{admin} unrestricted {self} for: {reason}.'
+
+        log(log_msg, Ansi.LRED)
+
+        if webhook_url := glob.config.webhooks['audit-log']:
+            webhook = Webhook(webhook_url, content=log_msg)
+            await webhook.post(glob.http)
+
         if self.online:
             # log the user out if they're offline, this
             # will simply relog them and refresh their state.
             self.logout()
-
-        if 'restricted' in self.__dict__:
-            del self.restricted # wipe cached_property
-
-        log(f'Unrestricted {self}.', Ansi.LCYAN)
 
     async def silence(self, admin: 'Player', duration: int,
                       reason: str) -> None:
@@ -579,6 +597,18 @@ class Player:
             # multi is now empty, chat has been removed.
             # remove the multi from the channels list.
             log(f'Match {self.match} finished.')
+
+            # cancel any pending start timers
+            if self.match.starting['start'] is not None:
+                self.match.starting['start'].cancel()
+                for alert in self.match.starting['alerts']:
+                    alert.cancel()
+
+                # i guess unnecessary but i'm ocd
+                self.match.starting['start'] = None
+                self.match.starting['alerts'] = None
+                self.match.starting['time'] = None
+
             glob.matches.remove(self.match)
 
             if lobby := glob.channels['#lobby']:
@@ -592,6 +622,10 @@ class Player:
                         self.match.host = s.player
                         self.match.host.enqueue(packets.matchTransferHost())
                         break
+
+            if self in self.match._refs:
+                self.match._refs.remove(self)
+                self.match.chat.send_bot(f'{self.name} removed from match referees.')
 
             # notify others of our deprature
             self.match.enqueue_state()
@@ -646,7 +680,7 @@ class Player:
 
         return True
 
-    def leave_channel(self, c: Channel) -> None:
+    def leave_channel(self, c: Channel, kick: bool = True) -> None:
         """Attempt to remove `self` from `c`."""
         # ensure they're in the chan.
         if self not in c:
@@ -655,7 +689,8 @@ class Player:
         c.remove(self) # remove from c.players
         self.channels.remove(c) # remove from p.channels
 
-        self.enqueue(packets.channelKick(c.name))
+        if kick:
+            self.enqueue(packets.channelKick(c.name))
 
         # update channel usercounts for all clients that can see.
         # for instanced channels, enqueue update to only players
@@ -739,27 +774,57 @@ class Player:
 
         self.friends.add(p.id)
         await glob.db.execute(
-            'INSERT INTO friendships '
-            'VALUES (%s, %s)',
+            "REPLACE INTO relationships "
+            "VALUES (%s, %s, 'friend')",
             [self.id, p.id]
         )
 
-        log(f'{self} added {p} to their friends.')
+        log(f'{self} friended {p}.')
 
     async def remove_friend(self, p: 'Player') -> None:
         """Attempt to remove `p` from `self`'s friends."""
         if p.id not in self.friends:
-            log(f'{self} tried to remove {p}, who is not their friend!', Ansi.LYELLOW)
+            log(f'{self} tried to unfriend {p}, who is not their friend!', Ansi.LYELLOW)
             return
 
         self.friends.remove(p.id)
         await glob.db.execute(
-            'DELETE FROM friendships '
+            'DELETE FROM relationships '
             'WHERE user1 = %s AND user2 = %s',
             [self.id, p.id]
         )
 
-        log(f'{self} removed {p} from their friends.')
+        log(f'{self} unfriended {p}.')
+
+    async def add_block(self, p: 'Player') -> None:
+        """Attempt to add `p` to `self`'s blocks."""
+        if p.id in self.blocks:
+            log(f"{self} tried to block {p}, who they've already blocked!", Ansi.LYELLOW)
+            return
+
+        self.blocks.add(p.id)
+        await glob.db.execute(
+            "REPLACE INTO relationships "
+            "VALUES (%s, %s, 'block')",
+            [self.id, p.id]
+        )
+
+        log(f'{self} blocked {p}.')
+
+    async def remove_block(self, p: 'Player') -> None:
+        """Attempt to remove `p` from `self`'s blocks."""
+        if p.id not in self.blocks:
+            log(f"{self} tried to unblock {p}, who they haven't blocked!", Ansi.LYELLOW)
+            return
+
+        self.blocks.remove(p.id)
+        await glob.db.execute(
+            'DELETE FROM relationships '
+            'WHERE user1 = %s AND user2 = %s',
+            [self.id, p.id]
+        )
+
+        log(f'{self} unblocked {p}.')
 
     def fetch_geoloc_db(self, ip: str) -> None:
         """Fetch geolocation data based on ip (using local db)."""
@@ -810,14 +875,23 @@ class Player:
 
         self.achievements[a.mode].add(a)
 
-    async def friends_from_sql(self) -> None:
-        """Retrieve `self`'s friends from sql."""
-        _friends = {row['user2'] for row in await glob.db.fetchall(
-            'SELECT user2 FROM friendships WHERE user1 = %s', [self.id]
-        )}
+    async def relationships_from_sql(self) -> None:
+        """Retrieve `self`'s relationships from sql."""
+        res = await glob.db.fetchall(
+            'SELECT user2, type '
+            'FROM relationships '
+            'WHERE user1 = %s',
+            [self.id]
+        )
+
+        for row in res:
+            if row['type'] == 'friend':
+                self.friends.add(row['user2'])
+            else:
+                self.blocks.add(row['user2'])
 
         # always have bot added to friends.
-        self.friends = _friends | {1}
+        self.friends.add(1)
 
     async def achievements_from_sql(self) -> None:
         """Retrieve `self`'s achievements from sql."""
@@ -893,6 +967,7 @@ class Player:
         return randnum
 
     async def update_latest_activity(self) -> None:
+        """Update the player's latest activity in the database."""
         await glob.db.execute(
             'UPDATE users '
             'SET latest_activity = UNIX_TIMESTAMP() '

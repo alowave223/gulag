@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from typing import Sequence
 from typing import TYPE_CHECKING
 
 import packets
@@ -66,16 +67,20 @@ class Channel:
 
     def send(self, msg: str, sender: 'Player',
              to_self: bool = False) -> None:
-        """Enqueue `msg` to all connected clients from `sender`."""
-        self.enqueue(
-            packets.sendMessage(
-                sender = sender.name,
-                msg = msg,
-                recipient = self.name,
-                sender_id = sender.id
-            ),
-            immune = () if to_self else (sender.id,)
+        """Enqueue `msg` to all appropriate clients from `sender`."""
+        data = packets.sendMessage(
+            sender=sender.name,
+            msg=msg,
+            recipient=self.name,
+            sender_id=sender.id
         )
+
+        for p in self.players:
+            if (
+                sender.id not in p.blocks and
+                (to_self or p.id != sender.id)
+            ):
+                p.enqueue(data)
 
     def send_bot(self, msg: str) -> None:
         """Enqueue `msg` to all connected clients from bot."""
@@ -83,18 +88,19 @@ class Channel:
 
         self.enqueue(
             packets.sendMessage(
-                sender = bot.name,
-                msg = msg,
-                recipient = self.name,
-                sender_id = bot.id
+                sender=bot.name,
+                msg=msg,
+                recipient=self.name,
+                sender_id=bot.id
             )
         )
 
     def send_selective(self, msg: str, sender: 'Player',
-                       recipients: list['Player']) -> None:
+                       recipients: Sequence['Player']) -> None:
         """Enqueue `sender`'s `msg` to `recipients`."""
-        for p in [t for t in recipients if t in self]:
-            p.send(msg, sender=sender, chan=self)
+        for p in recipients:
+            if p in self:
+                p.send(msg, sender=sender, chan=self)
 
     def append(self, p: 'Player') -> None:
         """Add `p` to the channel's players."""
@@ -104,13 +110,13 @@ class Channel:
         """Remove `p` from the channel's players."""
         self.players.remove(p)
 
-        if len(self.players) == 0 and self.instance:
+        if not self.players and self.instance:
             # if it's an instance channel and this
             # is the last member leaving, just remove
             # the channel from the global list.
             glob.channels.remove(self)
 
-    def enqueue(self, data: bytes, immune: tuple[int, ...] = ()) -> None:
+    def enqueue(self, data: bytes, immune: Sequence[int] = []) -> None:
         """Enqueue `data` to all connected clients not in `immune`."""
         for p in self.players:
             if p.id not in immune:

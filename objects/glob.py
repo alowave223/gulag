@@ -7,7 +7,7 @@ import config  # NOQA
 
 # this file contains no actualy definitions
 if __import__('typing').TYPE_CHECKING:
-    from asyncio import Queue
+    #from asyncio import Queue
     from typing import Optional
 
     from aiohttp.client import ClientSession
@@ -18,13 +18,13 @@ if __import__('typing').TYPE_CHECKING:
     import geoip2.database
 
     from objects.achievement import Achievement
-    from objects.collections import PlayerList
-    from objects.collections import ChannelList
-    from objects.collections import MatchList
-    from objects.collections import ClanList
-    from objects.collections import MapPoolList
+    from objects.collections import Players
+    from objects.collections import Channels
+    from objects.collections import Matches
+    from objects.collections import Clans
+    from objects.collections import MapPools
     from objects.player import Player
-    from objects.score import Score
+    #from objects.score import Score
     from packets import BanchoPacket
     from packets import Packets
 
@@ -34,25 +34,24 @@ __all__ = (
     'pools', 'clans', 'achievements',
     'version', 'bot', 'api_keys',
     'bancho_packets', 'db', 'http',
-    'datadog', 'sketchy_queue',
-    'oppai_built', 'cache'
+    'datadog', 'cache'#, 'sketchy_queue'
 )
 
 # server object
 app: 'Server'
 
 # current server state
-players: 'PlayerList'
-channels: 'ChannelList'
-matches: 'MatchList'
-clans: 'ClanList'
-pools: 'MapPoolList'
+players: 'Players'
+channels: 'Channels'
+matches: 'Matches'
+clans: 'Clans'
+pools: 'MapPools'
 achievements: dict[int, list['Achievement']] # per vn gamemode
 
 bot: 'Player'
 version: 'Version'
 
-geoloc_db: 'geoip2.database.Reader'
+geoloc_db: 'Optional[geoip2.database.Reader]'
 
 # currently registered api tokens
 api_keys: dict[str, int] # {api_key: player_id}
@@ -64,12 +63,6 @@ bancho_packets: dict['Packets', 'BanchoPacket']
 db: 'AsyncSQLPool'
 http: 'ClientSession'
 datadog: 'Optional[ThreadStats]'
-
-# queue of submitted scores deemed 'sketchy'; to be analyzed.
-sketchy_queue: 'Queue[Score]'
-
-# whether or not the oppai-ng binary was located at startup.
-oppai_built: bool
 
 # gulag's main cache.
 # the idea here is simple - keep a copy of things either from sql or
@@ -91,7 +84,15 @@ cache = {
     # cache all beatmap data calculated while online. this way,
     # the most requested maps will inevitably always end up cached.
     'beatmap': {}, # {md5: {timeout, map}, ...}
-    # cache all beatmaps which we failed to get from the osuapi,
-    # so that we do not have to perform this request multiple times.
-    'unsubmitted': set() # {md5, ...}
+
+    # cache all beatmaps which are unsubmitted or need an update,
+    # since their osu!api requests will fail and thus we'll do the
+    # request multiple times which is quite slow & not great.
+    'unsubmitted': set(), # {md5, ...}
+    'needs_update': set() # {md5, ...}
 }
+
+''' (currently unused)
+# queue of submitted scores deemed 'sketchy'; to be analyzed.
+sketchy_queue: 'Queue[Score]'
+'''

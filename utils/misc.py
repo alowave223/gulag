@@ -2,11 +2,13 @@
 
 import dill as pickle
 import inspect
+import io
 import pymysql
 import requests
 import secrets
 import sys
 import types
+import zipfile
 from pathlib import Path
 from typing import Callable
 from typing import Sequence
@@ -22,7 +24,7 @@ from cmyui.osu.replay import ReplayFrame
 __all__ = (
     'get_press_times',
     'make_safe_name',
-    'download_achievement_pngs',
+    'download_achievement_images',
     'seconds_readable',
     'install_excepthook',
     'get_appropriate_stacktrace',
@@ -69,8 +71,23 @@ def make_safe_name(name: str) -> str:
     """Return a name safe for usage in sql."""
     return name.lower().replace(' ', '_')
 
-# TODO: async? lol
-def download_achievement_pngs(medals_path: Path) -> None:
+def _download_achievement_images_mirror(achievements_path: Path) -> bool:
+    """Download all used achievement images (using mirror's zip)."""
+    log('Downloading achievement images from mirror.', Ansi.LCYAN)
+    r = requests.get('https://cmyui.xyz/achievement_images.zip')
+
+    if r.status_code != 200:
+        log('Failed to fetch from mirror, trying osu! servers.', Ansi.LRED)
+        return False
+
+    with io.BytesIO(r.content) as data:
+        with zipfile.ZipFile(data) as myfile:
+            myfile.extractall(achievements_path)
+
+    return True
+
+def _download_achievement_images_osu(achievements_path: Path) -> bool:
+    """Download all used achievement images (one by one, from osu!)."""
     achs = []
 
     for res in ('', '@2x'):
@@ -83,14 +100,33 @@ def download_achievement_pngs(medals_path: Path) -> None:
         for n in (500, 750, 1000, 2000):
             achs.append(f'osu-combo-{n}{res}.png')
 
+    log('Downloading achievement images from osu!.', Ansi.LCYAN)
+
     for ach in achs:
         r = requests.get(f'https://assets.ppy.sh/medals/client/{ach}')
         if r.status_code != 200:
-            log(f'Failed to download achievement: {ach}', Ansi.LRED)
-            continue
+            return False
 
         log(f'Saving achievement: {ach}', Ansi.LCYAN)
-        (medals_path / f'{ach}').write_bytes(r.content)
+        (achievements_path / f'{ach}').write_bytes(r.content)
+
+    return True
+
+def download_achievement_images(achievements_path: Path) -> None:
+    """Download all used achievement images (using best available source)."""
+    # try using my cmyui.xyz mirror (zip file)
+    downloaded = _download_achievement_images_mirror(achievements_path)
+
+    if not downloaded:
+        # as fallback, download individual files from osu!
+        downloaded = _download_achievement_images_osu(achievements_path)
+
+    if downloaded:
+        log('Successfully saved all achievement images.', Ansi.LGREEN)
+    else:
+        # TODO: make the code safe in this state
+        log('Failed to download achievement images.', Ansi.LRED)
+        achievements_path.rmdir()
 
 def seconds_readable(seconds: int) -> str:
     """Turn seconds as an int into 'DD:HH:MM:SS'."""
@@ -111,6 +147,7 @@ def seconds_readable(seconds: int) -> str:
     return ':'.join(r)
 
 def install_excepthook():
+    """Install a thin wrapper for sys.excepthook to catch gulag-related stuff."""
     sys._excepthook = sys.excepthook # backup
     def _excepthook(
         type_: Type[BaseException],
@@ -120,6 +157,17 @@ def install_excepthook():
         if type_ is KeyboardInterrupt:
             print('\33[2K\r', end='Aborted startup.')
             return
+        elif (
+            type_ is AttributeError and
+            value.args[0].startswith("module 'config' has no attribute")
+        ):
+            attr_name = value.args[0][34:-1]
+            log("gulag's config has been updated, and has "
+                f"added a new `{attr_name}` attribute.", Ansi.LMAGENTA)
+            log("Please refer to it's value & example in "
+                "ext/config.sample.py for additional info.", Ansi.LCYAN)
+            return
+
         print('\x1b[0;31mgulag ran into an issue '
             'before starting up :(\x1b[0m')
         sys._excepthook(type_, value, traceback)
@@ -150,7 +198,8 @@ async def log_strange_occurrence(obj: object) -> None:
         # automatically reporting problems to cmyui's server
         async with glob.http.post(
             url = 'https://log.cmyui.xyz/',
-            headers = {'Gulag-Version': repr(glob.version)},
+            headers = {'Gulag-Version': repr(glob.version),
+                       'Gulag-Domain': glob.config.domain},
             data = pickled_obj,
         ) as resp:
             if (

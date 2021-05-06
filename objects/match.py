@@ -24,6 +24,8 @@ from utils.misc import escape_enum
 from utils.misc import pymysql_encode
 
 if TYPE_CHECKING:
+    from asyncio import TimerHandle
+
     from objects.player import Player
     from objects.channel import Channel
 
@@ -183,6 +185,11 @@ class Slot:
         self.loaded = False
         self.skipped = False
 
+StartingTimers = dict[
+                       # start         alerts               time
+    str, Optional[Union['TimerHandle', list['TimerHandle'], float]]
+]
+
 class Match:
     """\
     An osu! multiplayer match.
@@ -196,6 +203,10 @@ class Match:
     slots: list[`Slot`]
         A list of 16 `Slot` objects representing the match's slots.
 
+    starting: Optional[dict[str, `TimerHandle`]]
+        Used when the match is started with !mp start <seconds>.
+        It stores both the starting timer, and the chat alert timers.
+
     seed: `int`
         The seed used for osu!mania's random mod.
 
@@ -204,12 +215,12 @@ class Match:
     """
     __slots__ = (
         'id', 'name', 'passwd', 'host', '_refs',
-        'map_id', 'map_md5', 'map_name',
+        'map_id', 'map_md5', 'map_name', 'prev_map_id',
         'mods', 'freemods', 'mode',
         'chat', 'slots',
         #'type',
         'team_type', 'win_condition',
-        'in_progress', 'seed',
+        'in_progress', 'starting', 'seed',
 
         'pool', # mappool currently selected
 
@@ -231,6 +242,7 @@ class Match:
         self.map_id = 0
         self.map_md5 = ''
         self.map_name = ''
+        self.prev_map_id = 0 # previously chosen map
 
         self.mods = Mods.NOMOD
         self.mode = GameMode.vn_std
@@ -244,6 +256,9 @@ class Match:
         self.win_condition = MatchWinConditions.score
 
         self.in_progress = False
+        self.starting: StartingTimers = {
+            'start': None, 'alerts': None, 'time': None
+        }
         self.seed = 0
 
         self.pool: Optional[MapPool] = None
@@ -377,8 +392,9 @@ class Match:
         self.winners.clear()
         self.bans.clear()
 
-    async def await_submissions(self, was_playing: list['Player']
-                               ) -> tuple[dict[str, Union[int, float]], list['Player']]:
+    async def await_submissions(
+        self, was_playing: Sequence['Player']
+    ) -> tuple[dict[str, Union[int, float]], list['Player']]:
         """Await score submissions from all players in completed state."""
         scores = defaultdict(int)
         didnt_submit: list['Player'] = []
@@ -428,7 +444,7 @@ class Match:
         # all scores retrieved, update the match.
         return scores, didnt_submit
 
-    async def update_matchpoints(self, was_playing: list['Player']) -> None:
+    async def update_matchpoints(self, was_playing: Sequence['Player']) -> None:
         """\
         Determine the winner from `scores`, increment & inform players.
 
