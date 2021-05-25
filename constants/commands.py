@@ -15,7 +15,6 @@ import uuid
 import datetime
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
 from importlib.metadata import version as pkg_version
 from time import perf_counter_ns as clock_ns
 from typing import Callable

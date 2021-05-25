@@ -930,7 +930,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             title = f'__New {score.status!r} Score! **{score.pp:.2f}pp**__',
             description = f'▸ [{score.mode!r}] • #{stats.rank} • {stats.pp}pp • {stats.acc:.2f}%\n▸ {status} • {score.grade} • {score.mods!r} • {score.acc:.2f}%\n[{score.bmap.artist} - {score.bmap.title} [{score.bmap.version}]](https://sakuru.pw/direct?id={score.bmap.set_id})',
             color=0xbb0ebe,
-            timestamp = datetime.datetime.utcnow()
+            timestamp = datetime.utcnow()
         )
 
         embed.set_author(
