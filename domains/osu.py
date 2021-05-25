@@ -21,6 +21,7 @@ from urllib.parse import unquote
 from utils.recalculator import PPCalculator
 from circleparse import parse_replay_file
 
+import aiomysql
 import bcrypt
 import orjson
 import json
@@ -133,12 +134,35 @@ def get_login(name_p: str, pass_p: str, auth_error: bytes = b'') -> Callable:
 """ /web/ handlers """
 
 # TODO
-# POST /web/osu-error.php
 # POST /web/osu-session.php
 # POST /web/osu-osz2-bmsubmit-post.php
 # POST /web/osu-osz2-bmsubmit-upload.php
 # GET /web/osu-osz2-bmsubmit-getid.php
 # GET /web/osu-get-beatmap-topic.php
+
+@domain.route('/web/osu-error.php', methods=['POST'])
+async def osuError(conn: Connection) -> Optional[bytes]:
+    if glob.app.debug:
+        err_args = conn.multipart_args
+        if 'u' in err_args and 'p' in err_args:
+            if not (
+                p := await glob.players.get_login(
+                    name = unquote(err_args['u']),
+                    pw_md5 = err_args['p']
+                )
+            ):
+                # player login incorrect
+                await utils.misc.log_strange_occurrence('osu-error auth failed')
+                p = None
+        else:
+            p = None
+
+        err_desc = '{feedback} ({exception})'.format(**err_args)
+        log(f'{p or "Offline user"} sent osu-error: {err_desc}', Ansi.LCYAN)
+        printc(err_args['stacktrace'][:-2], Ansi.LMAGENTA)
+
+    # TODO: save error in db
+    pass
 
 @domain.route('/web/osu-screenshot.php', methods=['POST'])
 @required_mpargs({'u', 'p', 'v'})
@@ -154,10 +178,23 @@ async def osuScreenshot(p: 'Player', conn: Connection) -> Optional[bytes]:
     if len(ss_file) > (4 * 1024 * 1024):
         return (400, b'Screenshot file too large.')
 
-    # check if jpeg or png
-    if ss_file[6:10] in (b'JFIF', b'Exif'):
+    if (
+        'v' not in conn.multipart_args or
+        conn.multipart_args['v'] != '1'
+    ):
+        await utils.misc.log_strange_occurrence(
+            f'v=1 missing from osu-screenshot mp args; {conn.multipart_args}'
+        )
+
+    if (
+        ss_file[:4] == b'\xff\xd8\xff\xe0' and
+        ss_file[6:11] == b'JFIF\x00'
+    ):
         extension = 'jpeg'
-    elif ss_file.startswith(b'\211PNG\r\n\032\n'):
+    elif (
+        ss_file[:8] == b'\x89PNG\r\n\x1a\n' and
+        ss_file[-8] == b'\x49END\xae\x42\x60\x82'
+    ):
         extension = 'png'
     else:
         return (400, b'Invalid file type.')
@@ -197,58 +234,67 @@ def gulag_to_osuapi_status(s: int) -> int:
 @get_login(name_p='u', pass_p='h')
 async def osuGetBeatmapInfo(p: 'Player', conn: Connection) -> Optional[bytes]:
     data = orjson.loads(conn.body)
+
+    num_requests = len(data['Filenames']) + len(data['Ids'])
+    log(f'{p} requested info for {num_requests} maps.', Ansi.LCYAN)
+
     ret = []
 
-    for idx, fname in enumerate(data['Filenames']):
-        # Attempt to regex pattern match the filename.
-        # If there is no match, simply ignore this map.
-        # XXX: Sometimes a map will be requested without a
-        # diff name, not really sure how to handle this? lol
-        if not (r := regexes.mapfile.match(fname)):
-            continue
+    async with glob.db.pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as db_cursor:
+            for idx, fname in enumerate(data['Filenames']):
+                # Attempt to regex pattern match the filename.
+                # If there is no match, simply ignore this map.
+                # XXX: Sometimes a map will be requested without a
+                # diff name, not really sure how to handle this? lol
+                if not (r := regexes.mapfile.match(fname)):
+                    continue
 
-        # try getting the map from sql
-        res = await glob.db.fetch(
-            'SELECT id, set_id, status, md5 '
-            'FROM maps WHERE artist = %s AND '
-            'title = %s AND creator = %s AND '
-            'version = %s', [
-                r['artist'], r['title'],
-                r['creator'], r['version']
-            ]
+                # try getting the map from sql
+                await db_cursor.execute(
+                    'SELECT id, set_id, status, md5 '
+                    'FROM maps WHERE artist = %s AND '
+                    'title = %s AND creator = %s AND '
+                    'version = %s', [
+                        r['artist'], r['title'],
+                        r['creator'], r['version']
+                    ]
+                )
+
+                if db_cursor.rowcount == 0:
+                    continue # no map found
+
+                res = await db_cursor.fetchone()
+
+                # convert from gulag -> osu!api status
+                res['status'] = gulag_to_osuapi_status(res['status'])
+
+                # try to get the user's grades on the map osu!
+                # only allows us to send back one per gamemode,
+                # so we'll just send back relax for the time being..
+                # XXX: perhaps user-customizable in the future?
+                grades = ['N', 'N', 'N', 'N']
+
+                await db_cursor.execute(
+                    'SELECT grade, mode FROM scores_rx '
+                    'WHERE map_md5 = %s AND userid = %s '
+                    'AND status = 2',
+                    [res['md5'], p.id]
+                )
+
+                async for score in db_cursor:
+                    grades[score['mode']] = score['grade']
+
+                ret.append(
+                    '{i}|{id}|{set_id}|{md5}|{status}|{grades}'.format(
+                        i = idx, grades = '|'.join(grades), **res
+                    )
+                )
+
+    if data['Ids']: # still have yet to see this used
+        await utils.misc.log_strange_occurrence(
+            f'{p} requested map(s) info by id ({data["Ids"]})'
         )
-
-        if not res:
-            # no map found
-            continue
-
-        # convert from gulag -> osu!api status
-        res['status'] = gulag_to_osuapi_status(res['status'])
-
-        # try to get the user's grades on the map osu!
-        # only allows us to send back one per gamemode,
-        # so we'll just send back relax for the time being..
-        # XXX: perhaps user-customizable in the future?
-        grades = ['N', 'N', 'N', 'N']
-
-        for score in await glob.db.fetchall(
-            'SELECT grade, mode FROM scores_rx '
-            'WHERE map_md5 = %s AND userid = %s '
-            'AND status = 2',
-            [res['md5'], p.id]
-        ):
-            grades[score['mode']] = score['grade']
-
-        ret.append(
-            '{i}|{id}|{set_id}|{md5}|{status}|{grades}'.format(
-                i = idx, grades = '|'.join(grades), **res
-            )
-        )
-
-    for _ in data['Ids']:
-        # still have yet to see this actually used..
-        stacktrace = utils.misc.get_appropriate_stacktrace()
-        await utils.misc.log_strange_occurrence(stacktrace)
 
     return '\n'.join(ret).encode()
 
@@ -372,6 +418,9 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
     if not conn.args['p'].isdecimal():
         return (400, b'')
 
+    if not glob.has_internet:
+        return b'-1\nosu!direct requires an internet connection.'
+
     if USING_CHIMU:
         search_url = f'{glob.config.mirror}/search'
     else:
@@ -408,7 +457,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
                 await utils.misc.log_strange_occurrence(stacktrace)
         else: # cheesegull
             if resp.status != 200:
-                return b'Failed to retrieve data from mirror!'
+                return b'-1\nFailed to retrieve data from the beatmap mirror.'
 
         result = await resp.json()
 
@@ -416,7 +465,7 @@ async def osuSearchHandler(p: 'Player', conn: Connection) -> Optional[bytes]:
             if result['code'] != 0:
                 stacktrace = utils.misc.get_appropriate_stacktrace()
                 await utils.misc.log_strange_occurrence(stacktrace)
-                return b'Failed to retrieve data from mirror!'
+                return b'-1\nFailed to retrieve data from the beatmap mirror.'
             result = result['data']
 
     lresult = len(result) # send over 100 if we receive
@@ -545,7 +594,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
         if not score.player.restricted:
             glob.players.enqueue(packets.userStats(score.player))
 
-    scores_table = score.mode.sql_table
+    scores_table = score.mode.scores_table
     mode_vn = score.mode.as_vanilla
 
     # Check for score duplicates
@@ -1099,8 +1148,6 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
     else:
         scoring = 'pp' if mode >= GameMode.rx_std else 'score'
 
-    table = mode.sql_table
-
     if not (bmap := Beatmap.from_md5_cache(map_md5)):
         # if not found in memory, get from sql.
         if not (bmap := await Beatmap.from_md5_sql(map_md5)):
@@ -1189,7 +1236,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         "s.nmiss, s.nkatu, s.ngeki, s.perfect, s.mods, "
         "UNIX_TIMESTAMP(s.play_time) time, u.id userid, "
         "COALESCE(CONCAT('[', c.tag, '] ', u.name), u.name) AS name "
-        f"FROM {table} s "
+        f"FROM {mode.scores_table} s "
         "INNER JOIN users u ON u.id = s.userid "
         "LEFT JOIN clans c ON c.id = u.clan_id "
         "WHERE s.map_md5 = %s AND s.status = 2 "
@@ -1245,7 +1292,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         'max_combo, n50, n100, n300, '
         'nmiss, nkatu, ngeki, perfect, mods, '
         'UNIX_TIMESTAMP(play_time) time '
-        f'FROM {table} '
+        f'FROM {scores_table} '
         'WHERE map_md5 = %s AND mode = %s '
         'AND userid = %s AND status = 2 '
         'ORDER BY _score DESC LIMIT 1', [
@@ -1260,7 +1307,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
     if p_best:
         # calculate the rank of the score.
         p_best_rank = 1 + (await glob.db.fetch(
-            f'SELECT COUNT(*) AS count FROM {table} s '
+            f'SELECT COUNT(*) AS count FROM {scores_table} s '
             'INNER JOIN users u ON u.id = s.userid '
             'WHERE s.map_md5 = %s AND s.mode = %s '
             'AND s.status = 2 AND u.priv & 1 '
@@ -1413,29 +1460,39 @@ async def banchoConnect(conn: Connection) -> Optional[bytes]:
 
         # NOTE: you can actually return an endpoint here
         # for the client to use as a bancho endpoint.
-        return b'allez-vous owo'
+        return
 
     # TODO: perhaps handle this..?
     NotImplemented
+
+_checkupdates_cache = { # default timeout is 1h, set on request.
+    'cuttingedge': {'check': None, 'path': None, 'timeout': 0},
+    'stable40': {'check': None, 'path': None, 'timeout': 0},
+    'beta40': {'check': None, 'path': None, 'timeout': 0},
+    'stable': {'check': None, 'path': None, 'timeout': 0}
+}
 
 # NOTE: this will only be triggered when using a server switcher.
 @domain.route('/web/check-updates.php')
 @required_args({'action', 'stream'})
 async def checkUpdates(conn: Connection) -> Optional[bytes]:
+    if not glob.has_internet:
+        return (503, b'') # requires internet connection
+
     action = conn.args['action']
     stream = conn.args['stream']
 
     if action not in ('check', 'path', 'error'):
-        return (400, b'Invalid action.')
+        return (400, b'') # invalid action
 
     if stream not in ('cuttingedge', 'stable40', 'beta40', 'stable'):
-        return (400, b'Invalid stream.')
+        return (400, b'') # invalid stream
 
     if action == 'error':
         # client is just reporting an error updating
         return
 
-    cache = glob.cache['update'][stream]
+    cache = _checkupdates_cache[stream]
     current_time = int(time.time())
 
     if cache[action] and cache['timeout'] > current_time:
@@ -1444,7 +1501,7 @@ async def checkUpdates(conn: Connection) -> Optional[bytes]:
     url = 'https://old.ppy.sh/web/check-updates.php'
     async with glob.http.get(url, params=conn.args) as resp:
         if not resp or resp.status != 200:
-            return (503, b'Failed to retrieve data from osu!')
+            return (503, b'') # failed to get data from osu
 
         result = await resp.read()
 
@@ -1734,10 +1791,10 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
         'SELECT id, map_md5, score, pp, acc, max_combo, '
         'mods, n300, n100, n50, nmiss, ngeki, nkatu, grade, '
         'status, mode, play_time, time_elapsed, perfect '
-        f'FROM {mode.sql_table} WHERE userid = %s'
+        f'FROM {mode.scores_table} WHERE userid = %s AND mode = %s'
     ]
 
-    params = [p.id]
+    params = [p.id, mode.as_vanilla]
 
     if mods is not None:
         if strong_equality:
@@ -1787,7 +1844,17 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
             'diff': bmap.diff
         }
 
-    return JSON({'status': 'success', 'scores': res})
+    player_info = {
+        'id': p.id,
+        'name': p.name,
+        'clan': {
+            'id': p.clan.id,
+            'name': p.clan.name,
+            'tag': p.clan.tag
+        } if p.clan else None
+    }
+
+    return JSON({'status': 'success', 'scores': res, 'player': player_info})
 
 @domain.route('/api/get_player_most_played')
 async def api_get_player_most_played(conn: Connection) -> Optional[bytes]:
@@ -1835,7 +1902,7 @@ async def api_get_player_most_played(conn: Connection) -> Optional[bytes]:
     res = await glob.db.fetchall(
         'SELECT m.md5, m.id, m.set_id, m.status, '
         'm.artist, m.title, m.version, m.creator, COUNT(*) plays '
-        f'FROM {mode.sql_table} s '
+        f'FROM {mode.scores_table} s '
         'INNER JOIN maps m ON m.md5 = s.map_md5 '
         'WHERE s.userid = %s '
         'AND s.mode = %s '
@@ -1955,12 +2022,18 @@ async def api_get_map_scores(conn: Connection) -> Optional[bytes]:
     else:
         limit = 50
 
+    # NOTE: userid will eventually become player_id,
+    # along with everywhere else in the codebase.
     query = [
-        'SELECT map_md5, score, pp, acc, max_combo, mods, '
-        'n300, n100, n50, nmiss, ngeki, nkatu, grade, status, '
-        'mode, play_time, time_elapsed, userid, perfect '
-        f'FROM {mode.sql_table} '
-        'WHERE map_md5 = %s AND mode = %s AND status = 2'
+        'SELECT s.map_md5, s.score, s.pp, s.acc, s.max_combo, s.mods, '
+        's.n300, s.n100, s.n50, s.nmiss, s.ngeki, s.nkatu, s.grade, s.status, '
+        's.mode, s.play_time, s.time_elapsed, s.userid, s.perfect, '
+        'u.name player_name, '
+        'c.id clan_id, c.name clan_name, c.tag clan_tag '
+        f'FROM {mode.scores_table} s '
+        'INNER JOIN users u ON u.id = s.userid '
+        'LEFT JOIN clans c ON c.id = u.clan_id '
+        'WHERE s.map_md5 = %s AND s.mode = %s AND s.status = 2'
     ]
     params = [bmap.md5, mode.as_vanilla]
 
@@ -2335,7 +2408,7 @@ if glob.config.redirect_osu_urls:
         conn.resp_headers['Location'] = f'https://osu.ppy.sh{conn.path}'
         return (301, b'')
 
-@domain.route(re.compile(r'^/ss/[a-zA-Z0-9]{8}\.(png|jpeg)$'))
+@domain.route(re.compile(r'^/ss/[a-zA-Z0-9-_]{8}\.(png|jpeg)$'))
 async def get_screenshot(conn: Connection) -> Optional[bytes]:
     """Serve a screenshot from the server, by filename."""
     if len(conn.path) not in (16, 17):
@@ -2379,7 +2452,7 @@ async def get_updated_beatmap(conn: Connection) -> Optional[bytes]:
             re['creator'], re['version']
         ]
     )):
-        return (404, b'Map not found.')
+        return (404, b'') # map not found in sql
 
     path = BEATMAPS_PATH / f'{res["id"]}.osu'
 
@@ -2390,13 +2463,16 @@ async def get_updated_beatmap(conn: Connection) -> Optional[bytes]:
         # up to date map found on disk.
         content = path.read_bytes()
     else:
+        if not glob.has_internet:
+            return (503, b'') # requires internet connection
+
         # map not found, or out of date; get from osu!
         url = f"https://old.ppy.sh/osu/{res['id']}"
 
         async with glob.http.get(url) as resp:
             if not resp or resp.status != 200:
                 log(f'Could not find map {path}!', Ansi.LRED)
-                return (404, b'Could not find map on osu! server.')
+                return (404, b'') # couldn't find on osu!'s server
 
             content = await resp.read()
 

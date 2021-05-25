@@ -6,6 +6,7 @@ import io
 import pymysql
 import requests
 import secrets
+import socket
 import sys
 import types
 import zipfile
@@ -26,6 +27,7 @@ __all__ = (
     'make_safe_name',
     'download_achievement_images',
     'seconds_readable',
+    'check_connection',
     'install_excepthook',
     'get_appropriate_stacktrace',
     'log_strange_occurrence',
@@ -108,7 +110,7 @@ def _download_achievement_images_osu(achievements_path: Path) -> bool:
             return False
 
         log(f'Saving achievement: {ach}', Ansi.LCYAN)
-        (achievements_path / f'{ach}').write_bytes(r.content)
+        (achievements_path / ach).write_bytes(r.content)
 
     return True
 
@@ -146,7 +148,28 @@ def seconds_readable(seconds: int) -> str:
     r.append(f'{seconds % 60:02d}')
     return ':'.join(r)
 
-def install_excepthook():
+def check_connection(timeout: float = 1.0) -> bool:
+    """Check for an active internet connection."""
+    online = False
+
+    default_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+
+    # attempt to connect to common dns servers.
+    with socket.socket() as sock:
+        for addr in ('1.1.1.1', '1.0.0.1',  # cloudflare
+                     '8.8.8.8', '8.8.4.4'): # google
+            try:
+                sock.connect((addr, 53))
+                online = True
+                break
+            except socket.error:
+                continue
+
+    socket.setdefaulttimeout(default_timeout)
+    return online
+
+def install_excepthook() -> None:
     """Install a thin wrapper for sys.excepthook to catch gulag-related stuff."""
     sys._excepthook = sys.excepthook # backup
     def _excepthook(
@@ -169,11 +192,12 @@ def install_excepthook():
             return
 
         print('\x1b[0;31mgulag ran into an issue '
-            'before starting up :(\x1b[0m')
+              'before starting up :(\x1b[0m')
         sys._excepthook(type_, value, traceback)
     sys.excepthook = _excepthook
 
 def get_appropriate_stacktrace() -> list[inspect.FrameInfo]:
+    """Return information of all frames related to cmyui_pkg and below."""
     stack = inspect.stack()[1:]
     for idx, frame in enumerate(stack):
         if frame.function == 'run':
@@ -191,6 +215,9 @@ def get_appropriate_stacktrace() -> list[inspect.FrameInfo]:
 
 STRANGE_LOG_DIR = Path.cwd() / '.data/logs'
 async def log_strange_occurrence(obj: object) -> None:
+    if not glob.has_internet: # requires internet connection
+        return
+
     pickled_obj = pickle.dumps(obj)
     uploaded = False
 
@@ -227,7 +254,7 @@ async def log_strange_occurrence(obj: object) -> None:
 
         log("Greatly appreciated if you could forward this to cmyui#0425 :)", Ansi.LYELLOW)
 
-def pymysql_encode(conv: Callable):
+def pymysql_encode(conv: Callable) -> Callable:
     """Decorator to allow for adding to pymysql's encoders."""
     def wrapper(cls):
         pymysql.converters.encoders[cls] = conv

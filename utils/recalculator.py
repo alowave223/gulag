@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 import orjson
 
 import aiohttp
-from cmyui import Ansi
-from cmyui import log
+from cmyui.logging import Ansi
+from cmyui.logging import log
 from maniera.calculator import Maniera
 
 if TYPE_CHECKING:

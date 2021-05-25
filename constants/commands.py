@@ -1271,12 +1271,14 @@ async def wipemap(ctx: Context) -> str:
     map_md5 = ctx.player.last_np['bmap'].md5
 
     # delete scores from all tables
-    for t in ('vn', 'rx', 'ap'):
-        await glob.db.execute(
-            f'DELETE FROM scores_{t} '
-            'WHERE map_md5 = %s',
-            [map_md5]
-        )
+    async with glob.db.pool.acquire() as conn:
+        async with conn.cursor() as db_cursor:
+            for t in ('vn', 'rx', 'ap'):
+                await db_cursor.execute(
+                    f'DELETE FROM scores_{t} '
+                    'WHERE map_md5 = %s',
+                    [map_md5]
+                )
 
     return 'Scores wiped.'
 

@@ -5,6 +5,8 @@ from enum import IntEnum
 from enum import unique
 from typing import TYPE_CHECKING
 
+import aiomysql
+
 from objects import glob
 from utils.misc import escape_enum
 from utils.misc import pymysql_encode
@@ -58,56 +60,58 @@ class Clan:
         """Remove a given player from the clan's members."""
         self.members.remove(p.id)
 
-        await glob.db.execute(
-            'UPDATE users '
-            'SET clan_id = 0, clan_priv = 0 '
-            'WHERE id = %s',
-            [p.id]
-        )
+        async with glob.db.pool.acquire() as conn:
+            async with conn.cursor() as db_cursor:
+                await db_cursor.execute(
+                    'UPDATE users '
+                    'SET clan_id = 0, clan_priv = 0 '
+                    'WHERE id = %s',
+                    [p.id]
+                )
 
-        if not self.members:
-            # no members left, disband clan.
-            await glob.db.execute(
-                'DELETE FROM clans '
-                'WHERE id = %s',
-                [self.id]
-            )
-        elif p.id == self.owner:
-            # owner leaving and members left,
-            # transfer the ownership.
-            # TODO: prefer officers
-            self.owner = next(iter(self.members))
+                if not self.members:
+                    # no members left, disband clan.
+                    await db_cursor.execute(
+                        'DELETE FROM clans '
+                        'WHERE id = %s',
+                        [self.id]
+                    )
+                elif p.id == self.owner:
+                    # owner leaving and members left,
+                    # transfer the ownership.
+                    # TODO: prefer officers
+                    self.owner = next(iter(self.members))
 
-            await glob.db.execute(
-                'UPDATE clans '
-                'SET owner = %s '
-                'WHERE id = %s',
-                [self.owner, self.id]
-            )
+                    await db_cursor.execute(
+                        'UPDATE clans '
+                        'SET owner = %s '
+                        'WHERE id = %s',
+                        [self.owner, self.id]
+                    )
 
-            await glob.db.execute(
-                'UPDATE users '
-                'SET clan_priv = 3 '
-                'WHERE id = %s',
-                [self.owner]
-            )
+                    await db_cursor.execute(
+                        'UPDATE users '
+                        'SET clan_priv = 3 '
+                        'WHERE id = %s',
+                        [self.owner]
+                    )
 
         p.clan = None
         p.clan_priv = None
 
-    async def members_from_sql(self) -> None:
+    async def members_from_sql(self, db_cursor: aiomysql.DictCursor) -> None:
         """Fetch all members from sql."""
         # TODO: in the future, we'll want to add
         # clan 'mods', so fetching rank here may
         # be a good idea to sort people into
         # different roles.
-        res = await glob.db.fetchall(
+        await db_cursor.execute(
             'SELECT id FROM users WHERE clan_id = %s',
-            [self.id], _dict=False
+            [self.id]
         )
 
-        if res:
-            self.members.update(*res)
+        async for row in db_cursor:
+            self.members.add(row['id'])
 
     def __repr__(self) -> str:
         return f'[{self.tag}] {self.name}'

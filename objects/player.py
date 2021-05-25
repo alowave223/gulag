@@ -14,6 +14,7 @@ from typing import Optional
 from typing import TYPE_CHECKING
 from typing import Union
 
+import aiomysql
 from cmyui.logging import Ansi
 from cmyui.logging import log
 from cmyui.discord import Webhook
@@ -292,7 +293,7 @@ class Player:
         return self.remaining_silence != 0
 
     @cached_property
-    def bancho_priv(self) -> int:
+    def bancho_priv(self) -> ClientPrivileges:
         """The player's privileges according to the client."""
         ret = ClientPrivileges(0)
         if self.priv & Privileges.Normal:
@@ -437,9 +438,10 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        if webhook_url := glob.config.webhooks['audit-log']:
-            webhook = Webhook(webhook_url, content=log_msg)
-            await webhook.post(glob.http)
+        if glob.has_internet:
+            if webhook_url := glob.config.webhooks['audit-log']:
+                webhook = Webhook(webhook_url, content=log_msg)
+                await webhook.post(glob.http)
 
         if self.online:
             # log the user out if they're offline, this
@@ -465,9 +467,10 @@ class Player:
 
         log(log_msg, Ansi.LRED)
 
-        if webhook_url := glob.config.webhooks['audit-log']:
-            webhook = Webhook(webhook_url, content=log_msg)
-            await webhook.post(glob.http)
+        if glob.has_internet:
+            if webhook_url := glob.config.webhooks['audit-log']:
+                webhook = Webhook(webhook_url, content=log_msg)
+                await webhook.post(glob.http)
 
         if self.online:
             # log the user out if they're offline, this
@@ -672,8 +675,11 @@ class Player:
         # update channel usercounts for all clients that can see.
         # for instanced channels, enqueue update to only players
         # in the instance; for normal channels, enqueue to all.
-        for p in (c.players if c.instance else glob.players):
-            p.enqueue(packets.channelInfo(*c.basic_info))
+        recipients = c.players if c.instance else glob.players
+        chan_info_packet = packets.channelInfo(*c.basic_info)
+
+        for p in recipients:
+            p.enqueue(chan_info_packet)
 
         if glob.app.debug:
             log(f'{self} joined {c}.')
@@ -696,9 +702,10 @@ class Player:
         # for instanced channels, enqueue update to only players
         # in the instance; for normal channels, enqueue to all.
         recipients = c.players if c.instance else glob.players
+        chan_info_packet = packets.channelInfo(*c.basic_info)
 
         for p in recipients:
-            p.enqueue(packets.channelInfo(*c.basic_info))
+            p.enqueue(chan_info_packet)
 
         if glob.app.debug:
             log(f'{self} left {c}.')
@@ -838,6 +845,9 @@ class Player:
 
     async def fetch_geoloc_web(self, ip: str) -> None:
         """Fetch geolocation data based on ip (using ip-api)."""
+        if not glob.has_internet: # requires internet connection
+            return
+
         url = f'http://ip-api.com/line/{ip}'
 
         async with glob.http.get(url) as resp:
@@ -875,16 +885,16 @@ class Player:
 
         self.achievements[a.mode].add(a)
 
-    async def relationships_from_sql(self) -> None:
+    async def relationships_from_sql(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve `self`'s relationships from sql."""
-        res = await glob.db.fetchall(
+        await db_cursor.execute(
             'SELECT user2, type '
             'FROM relationships '
             'WHERE user1 = %s',
             [self.id]
         )
 
-        for row in res:
+        async for row in db_cursor:
             if row['type'] == 'friend':
                 self.friends.add(row['user2'])
             else:
@@ -893,57 +903,66 @@ class Player:
         # always have bot added to friends.
         self.friends.add(1)
 
-    async def achievements_from_sql(self) -> None:
+    async def achievements_from_sql(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve `self`'s achievements from sql."""
         for mode in range(4):
             # get all users achievements for this mode
-            res = await glob.db.fetchall(
+            await db_cursor.execute(
                 'SELECT ua.achid id FROM user_achievements ua '
                 'INNER JOIN achievements a ON a.id = ua.achid '
                 'WHERE ua.userid = %s AND a.mode = %s',
                 [self.id, mode]
             )
 
-            if not res:
-                # user has no achievements for this mode
+            if db_cursor.rowcount == 0:
+                # no achievements
+                # for given mode
                 continue
 
             # get cached achievements for this mode
             achs = glob.achievements[mode]
 
-            for row in res:
+            async for row in db_cursor:
                 for ach in achs:
                     if row['id'] == ach.id:
                         self.achievements[mode].add(ach)
 
-    async def stats_from_sql_full(self) -> None:
+    async def stats_from_sql_full(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve `self`'s stats (all modes) from sql."""
+        await db_cursor.execute(
+            'SELECT * FROM stats WHERE id = %s',
+            [self.id]
+        )
+
+        res = await db_cursor.fetchone()
+
+        # get global rank for each mode
+        # XXX: this will be improved in future
         for mode in GameMode:
-            # grab static stats from SQL.
-            res = await glob.db.fetch(
-                'SELECT tscore_{0:sql} tscore, rscore_{0:sql} rscore, '
-                'pp_{0:sql} pp, plays_{0:sql} plays, acc_{0:sql} acc, '
-                'playtime_{0:sql} playtime, max_combo_{0:sql} max_combo '
-                'FROM stats WHERE id = %s'.format(mode),
-                [self.id]
-            )
-
-            if not res:
-                log(f"Failed to fetch {self}'s {mode!r} stats.", Ansi.LRED)
-                return
-
+            mode_suffix = format(mode, 'sql')
             # calculate rank.
-            res['rank'] = (await glob.db.fetch(
+            await db_cursor.execute(
                 'SELECT COUNT(*) AS higher_pp_players '
                 'FROM stats s '
                 'INNER JOIN users u USING(id) '
-                f'WHERE s.pp_{mode:sql} > %s '
+                f'WHERE s.pp_{mode_suffix} > %s '
                 'AND u.priv & 1 and u.id != %s',
-                [res['pp'], self.id]
-            ))['higher_pp_players'] + 1
+                [res[f'pp_{mode_suffix}'], self.id]
+            )
+
+            mode_rank = (await db_cursor.fetchone())['higher_pp_players'] + 1
 
             # update stats
-            self.stats[mode] = ModeData(**res)
+            self.stats[mode] = ModeData(
+                tscore=res[f'tscore_{mode_suffix}'],
+                rscore=res[f'rscore_{mode_suffix}'],
+                pp=res[f'pp_{mode_suffix}'],
+                acc=res[f'acc_{mode_suffix}'],
+                plays=res[f'plays_{mode_suffix}'],
+                playtime=res[f'playtime_{mode_suffix}'],
+                max_combo=res[f'max_combo_{mode_suffix}'],
+                rank=mode_rank
+            )
 
     async def add_to_menu(
         self, coroutine: Coroutine,

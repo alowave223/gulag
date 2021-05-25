@@ -12,7 +12,9 @@ from typing import Sequence
 from typing import TYPE_CHECKING
 from typing import Union
 
-from cmyui import log, Ansi
+import aiomysql
+from cmyui.logging import Ansi
+from cmyui.logging import log
 
 import packets
 from constants import regexes
@@ -127,13 +129,16 @@ class MapPool:
     def __repr__(self) -> str:
         return f'<{self.name}>'
 
-    async def maps_from_sql(self) -> None:
+    async def maps_from_sql(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve all maps from sql to populate `self.maps`."""
-        query = ('SELECT map_id, mods, slot '
-                 'FROM tourney_pool_maps '
-                 'WHERE pool_id = %s')
+        await db_cursor.execute(
+            'SELECT map_id, mods, slot '
+            'FROM tourney_pool_maps '
+            'WHERE pool_id = %s',
+            [self.id]
+        )
 
-        for row in await glob.db.fetchall(query, [self.id]):
+        async for row in db_cursor:
             map_id = row['map_id']
             bmap = await Beatmap.from_bid(map_id)
 
@@ -145,7 +150,7 @@ class MapPool:
                 # TODO: perhaps discord webhook?
                 log(f'Removing {map_id} from pool {self.name} (not found).', Ansi.LRED)
 
-                await glob.db.execute(
+                await db_cursor.execute(
                     'DELETE FROM tourney_pool_maps '
                     'WHERE map_id = %s',
                     [map_id]

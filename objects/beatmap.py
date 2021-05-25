@@ -2,13 +2,14 @@
 
 import time
 from collections import defaultdict
+#from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
 from enum import unique
 from typing import Optional
 
-from cmyui import Ansi
-from cmyui import log
+from cmyui.logging import Ansi
+from cmyui.logging import log
 
 from constants.gamemodes import GameMode
 from constants.mods import Mods
@@ -116,7 +117,6 @@ gulagstatus2str_dict = {
     RankedStatus.Loved: 'Loved'
 }
 
-...
 #@dataclass
 #class BeatmapInfoRequest:
 #    filenames: Sequence[str]
@@ -326,6 +326,9 @@ class Beatmap:
     @classmethod
     async def from_md5_osuapi(cls, md5: str) -> Optional['Beatmap']:
         """Fetch & return a map object from osu!api by md5."""
+        if not glob.has_internet: # requires internet connection
+            return None
+
         url = 'https://old.ppy.sh/api/get_beatmaps'
         params = {'k': glob.config.osu_api_key, 'h': md5}
 
@@ -404,6 +407,9 @@ class Beatmap:
     @classmethod
     async def cache_set(cls, set_id: int) -> None:
         """Cache (ram & sql) all maps from the osu!api."""
+        if not glob.has_internet: # requires internet connection
+            return None
+
         url = 'https://old.ppy.sh/api/get_beatmaps'
         params = {'k': glob.config.osu_api_key, 's': set_id}
 
