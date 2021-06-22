@@ -979,7 +979,7 @@ async def osuSubmitModularSelector(conn: Connection) -> Optional[bytes]:
             title = f'__New {score.status!r} Score! **{score.pp:.2f}pp**__',
             description = f'▸ [{score.mode!r}] • #{stats.rank} • {stats.pp}pp • {stats.acc:.2f}%\n▸ {status} • {score.grade} • {score.mods!r} • {score.acc:.2f}%\n[{score.bmap.artist} - {score.bmap.title} [{score.bmap.version}]](https://sakuru.pw/direct?id={score.bmap.set_id})',
             color=0xbb0ebe,
-            timestamp = datetime.utcnow()
+            timestamp = datetime.datetime.utcnow()
         )
 
         embed.set_author(
@@ -1148,6 +1148,8 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
     else:
         scoring = 'pp' if mode >= GameMode.rx_std else 'score'
 
+    scores_table = mode.scores_table
+
     if not (bmap := Beatmap.from_md5_cache(map_md5)):
         # if not found in memory, get from sql.
         if not (bmap := await Beatmap.from_md5_sql(map_md5)):
@@ -1236,7 +1238,7 @@ async def getScores(p: 'Player', conn: Connection) -> Optional[bytes]:
         "s.nmiss, s.nkatu, s.ngeki, s.perfect, s.mods, "
         "UNIX_TIMESTAMP(s.play_time) time, u.id userid, "
         "COALESCE(CONCAT('[', c.tag, '] ', u.name), u.name) AS name "
-        f"FROM {mode.scores_table} s "
+        f"FROM {scores_table} s "
         "INNER JOIN users u ON u.id = s.userid "
         "LEFT JOIN clans c ON c.id = u.clan_id "
         "WHERE s.map_md5 = %s AND s.status = 2 "
@@ -1787,12 +1789,20 @@ async def api_get_player_scores(conn: Connection) -> Optional[bytes]:
 
     # build sql query & fetch info
 
-    query = [
-        'SELECT id, map_md5, score, pp, acc, max_combo, '
-        'mods, n300, n100, n50, nmiss, ngeki, nkatu, grade, '
-        'status, mode, play_time, time_elapsed, perfect '
-        f'FROM {mode.scores_table} WHERE userid = %s AND mode = %s'
-    ]
+    if (table := conn.args.get('table', None)) is not None:
+        query = [
+            'SELECT id, map_md5, score, pp, acc, max_combo, '
+            'mods, n300, n100, n50, nmiss, ngeki, nkatu, grade, '
+            'status, mode, play_time, time_elapsed, perfect '
+            f'FROM scores_{table} WHERE userid = %s AND mode = %s'
+        ]
+    else:
+        query = [
+            'SELECT id, map_md5, score, pp, acc, max_combo, '
+            'mods, n300, n100, n50, nmiss, ngeki, nkatu, grade, '
+            'status, mode, play_time, time_elapsed, perfect '
+            f'FROM {mode.scores_table} WHERE userid = %s AND mode = %s'
+        ]
 
     params = [p.id, mode.as_vanilla]
 
@@ -2051,6 +2061,19 @@ async def api_get_map_scores(conn: Connection) -> Optional[bytes]:
         sort = 'pp' if mode >= GameMode.rx_std else 'score'
     else: # recent
         sort = 'play_time'
+
+    if (user := conn.args.get('user', None)) is not None:
+        if not user.isdecimal():
+            if not await glob.db.fetch("SELECT 1 FROM users WHERE safe_name = %s", [user]):
+                return (400, JSON({'status': 'Invalid user.'}))
+            else:
+                query.append('AND u.name = %s')
+                params.append(user)
+        elif not await glob.db.fetch("SELECT 1 FROM users WHERE id = %s", [user]):
+            return (400, JSON({'status': 'Invalid user.'}))
+        else:
+            query.append('AND s.userid = %s')
+            params.append(user)
 
     query.append(f'ORDER BY {sort} DESC LIMIT %s')
     params.append(limit)

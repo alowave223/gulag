@@ -683,24 +683,24 @@ async def login(body: bytes, ip: str, db_cursor: aiomysql.DictCursor) -> tuple[b
             [p.id]
         )
 
-        if db_cursor.rowcount != 0:
-            sent_to = set() # ids
+        # if db_cursor.rowcount != 0:
+        #     sent_to = set() # ids
 
-            for msg in db_cursor:
-                if msg['from'] not in sent_to:
-                    data += packets.sendMessage(
-                        sender=msg['from'], msg='Unread messages',
-                        recipient=msg['to'], sender_id=msg['from_id']
-                    )
-                    sent_to.add(msg['from'])
+        #     for msg in db_cursor:
+        #         if msg['from'] not in sent_to:
+        #             data += packets.sendMessage(
+        #                 sender=msg['from'], msg='Unread messages',
+        #                 recipient=msg['to'], sender_id=msg['from_id']
+        #             )
+        #             sent_to.add(msg['from'])
 
-                msg_time = dt.fromtimestamp(msg['time'])
-                msg_ts = f'[{msg_time:%a %b %d @ %H:%M%p}] {msg["msg"]}'
+        #         msg_time = dt.fromtimestamp(msg['time'])
+        #         msg_ts = f'[{msg_time:%a %b %d @ %H:%M%p}] {msg["msg"]}'
 
-                data += packets.sendMessage(
-                    sender=msg['from'], msg=msg_ts,
-                    recipient=msg['to'], sender_id=msg['from_id']
-                )
+        #         data += packets.sendMessage(
+        #             sender=msg['from'], msg=msg_ts,
+        #             recipient=msg['to'], sender_id=msg['from_id']
+        #         )
 
         if not p.priv & Privileges.Verified:
             # this is the player's first login, verify their
