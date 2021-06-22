@@ -587,7 +587,6 @@ async def _map(ctx: Context) -> str:
                     icon_url = f'https://a.sakuru.pw/{ctx.player.id}'
                 )
 
-<<<<<<< HEAD
             embed.set_author(
                 url = f'https://sakuru.pw/direct?id={bmap.set_id}',
                 name = f'{bmap.artist} - {bmap.title}',
@@ -620,10 +619,6 @@ async def _map(ctx: Context) -> str:
             embed.set_image(url=f'https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/cover.jpg')
             webhook.add_embed(embed)
             await webhook.post(glob.http)
-=======
-                for bmap in glob.cache['beatmapset'][bmap.set_id].maps:
-                    bmap.status = new_status
->>>>>>> 34cd2195f429002680768a6768f191f0a2e30c4d
 
     else:
         # update only map
@@ -674,12 +669,9 @@ async def _map(ctx: Context) -> str:
                 icon_url = 'https://sakuru.pw/static/ingame.png'
             )
 
-<<<<<<< HEAD
             length = str(datetime.timedelta(seconds = bmap.total_length))
-=======
-                if bmap.md5 in glob.cache['beatmap']:
-                    glob.cache['beatmap'][bmap.md5].status = new_status
->>>>>>> 34cd2195f429002680768a6768f191f0a2e30c4d
+            if bmap.md5 in glob.cache['beatmap']:
+                glob.cache['beatmap'][bmap.md5].status = new_status
 
             if bmap.total_length < 3600:
                 length = length[2:]

@@ -696,16 +696,16 @@ async def login(body_view: memoryview, ip: str, db_cursor: aiomysql.DictCursor) 
         # if db_cursor.rowcount != 0:
         #     sent_to = set() # ids
 
-            async for msg in db_cursor:
-                if msg['from'] not in sent_to:
-                    data += packets.sendMessage(
-                        sender=msg['from'], msg='Unread messages',
-                        recipient=msg['to'], sender_id=msg['from_id']
-                    )
-                    sent_to.add(msg['from'])
+        # async for msg in db_cursor:
+        #     if msg['from'] not in sent_to:
+        #         data += packets.sendMessage(
+        #             sender=msg['from'], msg='Unread messages',
+        #             recipient=msg['to'], sender_id=msg['from_id']
+        #         )
+        #         sent_to.add(msg['from'])
 
-                msg_time = datetime.fromtimestamp(msg['time'])
-                msg_ts = f'[{msg_time:%a %b %d @ %H:%M%p}] {msg["msg"]}'
+        #     msg_time = datetime.fromtimestamp(msg['time'])
+        #     msg_ts = f'[{msg_time:%a %b %d @ %H:%M%p}] {msg["msg"]}'
 
         #         data += packets.sendMessage(
         #             sender=msg['from'], msg=msg_ts,

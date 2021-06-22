@@ -279,6 +279,7 @@ class Beatmap:
                     set_id = res['set_id']
                 else:
                     # failed to get from db, try osu!api
+                    print('yes')
                     api_data = await osuapiv1_getbeatmaps(h=md5)
 
                     if not api_data:
@@ -376,8 +377,8 @@ class Beatmap:
 
         m.diff = float(bmap['difficultyrating'])
         m.last_check = int(time.time())
-                pp, _ = await ppcalc.perform()
-                self.pp_cache[mode_vn][mods][idx] = pp
+        pp, _ = await ppcalc.perform()
+        self.pp_cache[mode_vn][mods][idx] = pp
 
     """ Lower level API """
     # These functions are meant for internal use under
@@ -692,25 +693,25 @@ class BeatmapSet:
         """Cache some common acc pp values for specified mods."""
         mode_vn = self.mode.as_vanilla
         self.pp_cache[mode_vn][mods] = [0.0, 0.0, 0.0, 0.0, 0.0]
-                if bmap.id in current_maps:
-                    # map is currently frozen, keep it's status.
-                    bmap.status = RankedStatus(current_maps[bmap.id])
-                    bmap.frozen = True
-                else:
-                    bmap.frozen = False
+        if bmap.id in current_maps:
+            # map is currently frozen, keep it's status.
+            bmap.status = RankedStatus(current_maps[bmap.id])
+            bmap.frozen = True
+        else:
+            bmap.frozen = False
 
-                bmap._parse_from_osuapi_resp(api_bmap)
+        bmap._parse_from_osuapi_resp(api_bmap)
 
-                # (some gulag-specific stuff not given by api)
-                bmap.pp_cache = {0: {}, 1: {}, 2: {}, 3: {}}
-                bmap.passes = 0
-                bmap.plays = 0
+        # (some gulag-specific stuff not given by api)
+        bmap.pp_cache = {0: {}, 1: {}, 2: {}, 3: {}}
+        bmap.passes = 0
+        bmap.plays = 0
 
-                bmap.set = self
-                self.maps.append(bmap)
+        bmap.set = self
+        self.maps.append(bmap)
 
-            await self._save_to_sql()
-            return self
+        await self._save_to_sql()
+        return self
 
     @classmethod
     async def from_bsid(cls, bsid: int) -> Optional['Beatmap']:

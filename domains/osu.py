@@ -243,6 +243,9 @@ async def osuGetBeatmapInfo(
     conn: Connection,
     db_cursor: aiomysql.DictCursor
 ) -> Optional[bytes]:
+    print('watafak')
+    print(conn.body)
+    print('watafak')
     data = orjson.loads(conn.body)
 
     num_requests = len(data['Filenames']) + len(data['Ids'])
@@ -1176,12 +1179,11 @@ async def getScores(
             glob.players.enqueue(packets.userStats(p))
 
     if(p.priv & Privileges.Donator and mods & Mods.AUTOPLAY):
-        scoring = 'pp'
+        scoring_metric = 'pp'
     else:
-        scoring = 'pp' if mode >= GameMode.rx_std else 'score'
+        scoring_metric = 'pp' if mode >= GameMode.rx_std else 'score'
 
     scores_table = mode.scores_table
-    scoring_metric = 'pp' if mode >= GameMode.rx_std else 'score'
 
     bmap = await Beatmap.from_md5(map_md5, set_id=map_set_id)
 
@@ -1225,6 +1227,7 @@ async def getScores(
             # map is unsubmitted.
             # add this map to the unsubmitted cache, so
             # that we don't have to make this request again.
+            print('pizdec')
             glob.cache['unsubmitted'].add(map_md5)
             return b'-1|false'
 
