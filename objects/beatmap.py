@@ -175,10 +175,11 @@ class Beatmap:
     """
     __slots__ = ('set', 'md5', 'id', 'set_id',
                  'artist', 'title', 'version', 'creator',
-                 'filename', 'last_update', 'total_length', 'max_combo',
-                 'status', 'frozen', 'plays', 'passes',
-                 'mode', 'bpm', 'cs', 'od', 'ar', 'hp',
-                 'diff', 'last_check', 'pp_cache')
+                 'filename', 'last_update', 'total_length',
+                 'max_combo', 'status', 'frozen',
+                 'plays', 'passes', 'mode', 'bpm',
+                 'cs', 'od', 'ar', 'hp',
+                 'diff', 'pp_cache')
 
     def __init__(self, **kwargs) -> None:
         self.set: Optional[BeatmapSet] = None
@@ -212,7 +213,6 @@ class Beatmap:
         self.hp = kwargs.get('hp', 0.0)
 
         self.diff = kwargs.get('diff', 0.00)
-        self.last_check = kwargs.get('last_check', int(time.time()))
         self.pp_cache = {0: {}, 1: {}, 2: {}, 3: {}} # {mode_vn: {mods: (acc/score: pp, ...), ...}}
 
     def __repr__(self) -> str:
@@ -241,20 +241,14 @@ class Beatmap:
 
     # TODO: implement some locking for the map fetch methods
 
-    @classmethod
-    async def from_bid_sql(cls, bid: int) -> Optional['Beatmap']:
-        """Fetch & return a map object from sql by id."""
-        if res := await glob.db.fetch(
-            'SELECT md5, set_id, '
-            'artist, title, version, creator, '
-            'last_update, total_length, max_combo, '
-            'status, frozen, plays, passes, '
-            'mode, bpm, cs, od, ar, hp, '
-            'diff, last_check '
-            'FROM maps WHERE id = %s',
-            [bid]
-        ):
-            return cls(**res, id=bid)
+    """ High level API """
+    # There are three levels of storage used for beatmaps,
+    # the cache (ram), the db (disk), and the osu!api (web).
+    # Going down this list gets exponentially slower, so
+    # we always prioritze what's fastest when possible.
+    # These methods will keep beatmaps reasonably up to
+    # date and use the fastest storage available, while
+    # populating the higher levels of the cache with new maps.
 
     @classmethod
     async def from_md5(cls, md5: str, set_id: int = -1) -> Optional['Beatmap']:
@@ -279,7 +273,6 @@ class Beatmap:
                     set_id = res['set_id']
                 else:
                     # failed to get from db, try osu!api
-                    print('yes')
                     api_data = await osuapiv1_getbeatmaps(h=md5)
 
                     if not api_data:
@@ -300,19 +293,6 @@ class Beatmap:
         return bmap
 
     @classmethod
-    async def from_md5_sql(cls, md5: str) -> Optional['Beatmap']:
-        """Fetch & return a map object from sql by md5."""
-        if res := await glob.db.fetch(
-            'SELECT id, set_id, '
-            'artist, title, version, creator, '
-            'last_update, total_length, max_combo, '
-            'status, frozen, plays, passes, '
-            'mode, bpm, cs, od, ar, hp, '
-            'diff, last_check '
-            'FROM maps WHERE md5 = %s',
-            [md5]
-        ):
-            return cls(**res, md5=md5)
     async def from_bid(cls, bid: int) -> Optional['Beatmap']:
         """Fetch a map from the cache, database, or osuapi by id."""
         bmap = await cls._from_bid_cache(bid)
@@ -375,10 +355,8 @@ class Beatmap:
             for idx, score in enumerate(glob.config.pp_cached_scores):
                 ppcalc.pp_attrs['score'] = score
 
-        m.diff = float(bmap['difficultyrating'])
-        m.last_check = int(time.time())
-        pp, _ = await ppcalc.perform()
-        self.pp_cache[mode_vn][mods][idx] = pp
+                pp, _ = await ppcalc.perform()
+                self.pp_cache[mode_vn][mods][idx] = pp
 
     """ Lower level API """
     # These functions are meant for internal use under
@@ -689,29 +667,25 @@ class BeatmapSet:
                 bmap: 'Beatmap' = Beatmap.__new__(Beatmap)
                 bmap.id = int(api_bmap['beatmap_id'])
 
-    async def cache_pp(self, mods: Mods) -> None:
-        """Cache some common acc pp values for specified mods."""
-        mode_vn = self.mode.as_vanilla
-        self.pp_cache[mode_vn][mods] = [0.0, 0.0, 0.0, 0.0, 0.0]
-        if bmap.id in current_maps:
-            # map is currently frozen, keep it's status.
-            bmap.status = RankedStatus(current_maps[bmap.id])
-            bmap.frozen = True
-        else:
-            bmap.frozen = False
+                if bmap.id in current_maps:
+                    # map is currently frozen, keep it's status.
+                    bmap.status = RankedStatus(current_maps[bmap.id])
+                    bmap.frozen = True
+                else:
+                    bmap.frozen = False
 
-        bmap._parse_from_osuapi_resp(api_bmap)
+                bmap._parse_from_osuapi_resp(api_bmap)
 
-        # (some gulag-specific stuff not given by api)
-        bmap.pp_cache = {0: {}, 1: {}, 2: {}, 3: {}}
-        bmap.passes = 0
-        bmap.plays = 0
+                # (some gulag-specific stuff not given by api)
+                bmap.pp_cache = {0: {}, 1: {}, 2: {}, 3: {}}
+                bmap.passes = 0
+                bmap.plays = 0
 
-        bmap.set = self
-        self.maps.append(bmap)
+                bmap.set = self
+                self.maps.append(bmap)
 
-        await self._save_to_sql()
-        return self
+            await self._save_to_sql()
+            return self
 
     @classmethod
     async def from_bsid(cls, bsid: int) -> Optional['Beatmap']:
