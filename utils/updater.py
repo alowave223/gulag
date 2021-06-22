@@ -24,6 +24,8 @@ __all__ = ('Updater',)
 
 SQL_UPDATES_FILE = Path.cwd() / 'ext/updates.sql'
 
+VERSION_RGX = re.compile(r'^# v(?P<ver>\d+\.\d+\.\d+)$')
+
 class Updater:
     def __init__(self, version: Version) -> None:
         self.version = version
@@ -79,7 +81,6 @@ class Updater:
             if not resp or resp.status != 200:
                 return self.version
 
-            # safe cuz py>=3.7 dicts are ordered
             if not (json := await resp.json()):
                 return self.version
 
@@ -117,8 +118,8 @@ class Updater:
 
             if line.startswith('#'):
                 # may be normal comment or new version
-                if rgx := re.fullmatch(r'^# v(?P<ver>\d+\.\d+\.\d+)$', line):
-                    current_ver = Version.from_str(rgx['ver'])
+                if r_match := VERSION_RGX.fullmatch(line):
+                    current_ver = Version.from_str(r_match['ver'])
 
                 continue
             elif not current_ver:
@@ -143,6 +144,11 @@ class Updater:
         log(f'Updating sql (v{prev_version!r} -> '
                           f'v{self.version!r}).', Ansi.LMAGENTA)
 
+        updated = False
+
+        # NOTE: this using a transaction is pretty pointless with mysql since
+        # any structural changes to tables will implciticly commit the changes.
+        # https://dev.mysql.com/doc/refman/5.7/en/implicit-commit.html
         async with glob.db.pool.acquire() as conn:
             async with conn.cursor() as db_cursor:
                 await conn.begin()
@@ -150,20 +156,23 @@ class Updater:
                     try:
                         await db_cursor.execute(query)
                     except aiomysql.MySQLError:
-                        # if anything goes wrong while writing a query,
-                        # most likely something is very wrong.
                         await conn.rollback()
+                        break
+                else:
+                    # all queries ran
+                    # without problems.
+                    await conn.commit()
+                    updated = True
 
-                        log(f'Failed: {query}', Ansi.GRAY)
-                        log("SQL failed to update - unless you've been "
-                            "modifying sql and know what caused this, "
-                            "please please contact cmyui#0425.", Ansi.LRED)
+        if not updated:
+            log(f'Failed: {query}', Ansi.GRAY)
+            log("SQL failed to update - unless you've been "
+                "modifying sql and know what caused this, "
+                "please please contact cmyui#0425.", Ansi.LRED)
 
-                        input('Press enter to exit')
+            input('Press enter to exit')
 
-                        await glob.app.after_serving()
-                        raise KeyboardInterrupt
-                    else:
-                        await conn.commit()
+            await glob.app.after_serving()
+            raise KeyboardInterrupt
 
     # TODO _update_config?

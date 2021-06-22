@@ -4,7 +4,7 @@ import random
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date
 from enum import IntEnum
 from enum import unique
 from functools import cached_property
@@ -20,7 +20,6 @@ from cmyui.logging import log
 from cmyui.discord import Webhook
 
 import packets
-from constants.countries import country_codes
 from constants.gamemodes import GameMode
 from constants.mods import Mods
 from constants.privileges import ClientPrivileges
@@ -188,21 +187,23 @@ class Player:
         self.clan: Optional['Clan'] = extras.get('clan', None)
         self.clan_priv: Optional['ClanPrivileges'] = extras.get('clan_priv', None)
 
-        # store achievements per-gamemode
-        self.achievements: dict[int, set['Achievement']] = {
-            0: set(), 1: set(),
-            2: set(), 3: set()
-        }
+        self.achievements: set['Achievement'] = set()
 
-        self.country = (0, 'XX') # (code, letters)
-        self.location = (0.0, 0.0) # (lat, long)
+        self.geoloc = extras.get('geoloc', {
+            'latitude': 0.0,
+            'longitude': 0.0,
+            'country': {
+                'iso_code': 'XX',
+                'numeric': 0
+            }
+        })
 
         self.utc_offset = extras.get('utc_offset', 0)
         self.pm_private = extras.get('pm_private', False)
         self.away_msg: Optional[str] = None
         self.silence_end = extras.get('silence_end', 0)
         self.in_lobby = False
-        self.osu_ver: Optional[datetime] = extras.get('osu_ver', None)
+        self.osu_ver: Optional[date] = extras.get('osu_ver', None)
         self.pres_filter = PresenceFilter.Nil
 
         login_time = extras.get('login_time', 0.0)
@@ -569,7 +570,7 @@ class Player:
         if (lobby := glob.channels['#lobby']) in self.channels:
             self.leave_channel(lobby)
 
-        slot = m.slots[0 if slotID == -1 else slotID]
+        slot: Slot = m.slots[0 if slotID == -1 else slotID]
 
         # if in a teams-vs mode, switch team from neutral to red.
         if m.team_type in (MatchTeamTypes.team_vs,
@@ -592,7 +593,16 @@ class Player:
                 log(f"{self} tried leaving a match they're not in?", Ansi.LYELLOW)
             return
 
-        self.match.get_slot(self).reset()
+        slot = self.match.get_slot(self)
+
+        if slot.status == SlotStatus.locked:
+            # player was kicked, keep the slot locked.
+            new_status = SlotStatus.locked
+        else:
+            # player left, open the slot for new players to join.
+            new_status = SlotStatus.open
+
+        slot.reset(new_status=new_status)
 
         self.leave_channel(self.match.chat)
 
@@ -655,16 +665,11 @@ class Player:
 
     def join_channel(self, c: Channel) -> bool:
         """Attempt to add `self` to `c`."""
-        # ensure they're not already in chan.
-        if self in c:
-            return False
-
-        # ensure they have read privs.
-        if self.priv & c.read_priv != c.read_priv:
-            return False
-
-        # lobby can only be interacted with while in mp lobby.
-        if c._name == '#lobby' and not self.in_lobby:
+        if (
+            self in c or # player already in channel
+            not c.can_read(self.priv) or # no read privs
+            c._name == '#lobby' and not self.in_lobby # not in mp lobby
+        ):
             return False
 
         c.append(self) # add to c.players
@@ -672,14 +677,21 @@ class Player:
 
         self.enqueue(packets.channelJoin(c.name))
 
-        # update channel usercounts for all clients that can see.
-        # for instanced channels, enqueue update to only players
-        # in the instance; for normal channels, enqueue to all.
-        recipients = c.players if c.instance else glob.players
-        chan_info_packet = packets.channelInfo(*c.basic_info)
+        chan_info_packet = packets.channelInfo(
+            c.name, c.topic, len(c.players)
+        )
 
-        for p in recipients:
-            p.enqueue(chan_info_packet)
+        if c.instance:
+            # instanced channel, only send the players
+            # who are currently inside of the instance
+            for p in c.players:
+                p.enqueue(chan_info_packet)
+        else:
+            # normal channel, send to all players who
+            # have access to see the channel's usercount.
+            for p in glob.players:
+                if c.can_read(p.priv):
+                    p.enqueue(chan_info_packet)
 
         if glob.app.debug:
             log(f'{self} joined {c}.')
@@ -698,14 +710,21 @@ class Player:
         if kick:
             self.enqueue(packets.channelKick(c.name))
 
-        # update channel usercounts for all clients that can see.
-        # for instanced channels, enqueue update to only players
-        # in the instance; for normal channels, enqueue to all.
-        recipients = c.players if c.instance else glob.players
-        chan_info_packet = packets.channelInfo(*c.basic_info)
+        chan_info_packet = packets.channelInfo(
+            c.name, c.topic, len(c.players)
+        )
 
-        for p in recipients:
-            p.enqueue(chan_info_packet)
+        if c.instance:
+            # instanced channel, only send the players
+            # who are currently inside of the instance
+            for p in c.players:
+                p.enqueue(chan_info_packet)
+        else:
+            # normal channel, send to all players who
+            # have access to see the channel's usercount.
+            for p in glob.players:
+                if c.can_read(p.priv):
+                    p.enqueue(chan_info_packet)
 
         if glob.app.debug:
             log(f'{self} left {c}.')
@@ -740,8 +759,8 @@ class Player:
 
             self.enqueue(packets.spectatorJoined(p.id))
         else:
-            # player is admin in stealth, only give other
-            # players data to us, not vice-versa.
+            # player is admin in stealth, only give
+            # other players data to us, not vice-versa.
             for s in self.spectators:
                 p.enqueue(packets.fellowSpectatorJoined(s.id))
 
@@ -762,8 +781,9 @@ class Player:
             # remove host from channel, deleting it.
             self.leave_channel(c)
         else:
+            # send new playercount
+            c_info = packets.channelInfo(c.name, c.topic, len(c.players))
             fellow = packets.fellowSpectatorLeft(p.id)
-            c_info = packets.channelInfo(*c.basic_info) # new playercount
 
             self.enqueue(c_info)
 
@@ -883,7 +903,7 @@ class Player:
             [self.id, a.id]
         )
 
-        self.achievements[a.mode].add(a)
+        self.achievements.add(a)
 
     async def relationships_from_sql(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve `self`'s relationships from sql."""
@@ -905,32 +925,24 @@ class Player:
 
     async def achievements_from_sql(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve `self`'s achievements from sql."""
-        for mode in range(4):
-            # get all users achievements for this mode
-            await db_cursor.execute(
-                'SELECT ua.achid id FROM user_achievements ua '
-                'INNER JOIN achievements a ON a.id = ua.achid '
-                'WHERE ua.userid = %s AND a.mode = %s',
-                [self.id, mode]
-            )
+        await db_cursor.execute(
+            'SELECT ua.achid id FROM user_achievements ua '
+            'INNER JOIN achievements a ON a.id = ua.achid '
+            'WHERE ua.userid = %s',
+            [self.id]
+        )
 
-            if db_cursor.rowcount == 0:
-                # no achievements
-                # for given mode
-                continue
-
-            # get cached achievements for this mode
-            achs = glob.achievements[mode]
-
-            async for row in db_cursor:
-                for ach in achs:
-                    if row['id'] == ach.id:
-                        self.achievements[mode].add(ach)
+        async for row in db_cursor:
+            for ach in glob.achievements:
+                if row['id'] == ach.id:
+                    self.achievements.add(ach)
 
     async def stats_from_sql_full(self, db_cursor: aiomysql.DictCursor) -> None:
         """Retrieve `self`'s stats (all modes) from sql."""
         await db_cursor.execute(
-            'SELECT * FROM stats WHERE id = %s',
+            'SELECT * '
+            'FROM stats '
+            'WHERE id = %s',
             [self.id]
         )
 
@@ -940,6 +952,7 @@ class Player:
         # XXX: this will be improved in future
         for mode in GameMode:
             mode_suffix = format(mode, 'sql')
+
             # calculate rank.
             await db_cursor.execute(
                 'SELECT COUNT(*) AS higher_pp_players '
@@ -985,14 +998,15 @@ class Player:
         # return the key.
         return randnum
 
-    async def update_latest_activity(self) -> None:
+    def update_latest_activity(self) -> None:
         """Update the player's latest activity in the database."""
-        await glob.db.execute(
+        task = glob.db.execute(
             'UPDATE users '
             'SET latest_activity = UNIX_TIMESTAMP() '
             'WHERE id = %s',
             [self.id]
         )
+        glob.loop.create_task(task)
 
     def enqueue(self, b: bytes) -> None:
         """Add data to be sent to the client."""

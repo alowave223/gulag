@@ -59,13 +59,6 @@ if TYPE_CHECKING:
 Messageable = Union['Channel', Player]
 CommandResponse = dict[str, str]
 
-class Command(NamedTuple):
-    triggers: list[str]
-    callback: Callable
-    priv: Privileges
-    hidden: bool
-    doc: str
-
 @dataclass
 class Context:
     player: Player
@@ -74,6 +67,13 @@ class Context:
 
     recipient: Optional[Messageable] = None
     match: Optional[Match] = None
+
+class Command(NamedTuple):
+    triggers: list[str]
+    callback: Callable[[Context], str]
+    priv: Privileges
+    hidden: bool
+    doc: str
 
 class CommandSet:
     __slots__ = ('trigger', 'doc', 'commands')
@@ -137,7 +137,7 @@ def command(priv: Privileges, aliases: list[str] = [],
 # and are granted to any unbanned players.
 """
 
-@command(Privileges.Normal, aliases=['h'], hidden=True)
+@command(Privileges.Normal, aliases=['', 'h'], hidden=True)
 async def _help(ctx: Context) -> str:
     """Show all documented commands the play can access."""
     prefix = glob.config.command_prefix
@@ -225,7 +225,7 @@ async def reconnect(ctx: Context) -> str:
 @command(Privileges.Normal)
 async def changename(ctx: Context) -> str:
     """Change your username."""
-    name = ' '.join(ctx.args)
+    name = ' '.join(ctx.args).strip()
 
     if not regexes.username.match(name):
         return 'Must be 2-15 characters in length.'
@@ -272,7 +272,9 @@ async def maplink(ctx: Context) -> str:
     else:
         return 'No map found!'
 
-    return f'[https://chimu.moe/d/{bmap.set_id} {bmap.full}]'
+    # gatari.pw & nerina.pw are pretty much the only
+    # reliable mirrors i know of? perhaps beatconnect
+    return f'[https://osu.gatari.pw/d/{bmap.set_id} {bmap.full}]'
 
 @command(Privileges.Normal, aliases=['last', 'r'])
 async def recent(ctx: Context) -> str:
@@ -338,10 +340,10 @@ async def _with(ctx: Context) -> str:
             if cmyui._isdecimal(param, _float=True): # acc
                 if not 0 <= (key_value := float(param)) <= 100:
                     return 'Invalid accuracy.'
-                pp_attrs.update({'acc': key_value})
+                pp_attrs['acc'] = key_value
             elif len(param) % 2 == 0: # mods
                 mods = Mods.from_modstr(param).filter_invalid_combos(mode_vn)
-                pp_attrs.update({'mods': mods})
+                pp_attrs['mods'] = mods
             else:
                 return 'Invalid syntax: !with <mods/acc> ...'
 
@@ -362,10 +364,10 @@ async def _with(ctx: Context) -> str:
                 if not 0 <= (key_value := int(param)) <= 1000000:
                     return 'Invalid score.'
 
-                pp_attrs.update({'score': key_value})
+                pp_attrs['score'] = key_value
             elif len(param) % 2 == 0: # mods
                 mods = Mods.from_modstr(param).filter_invalid_combos(mode_vn)
-                pp_attrs.update({'mods': mods})
+                pp_attrs['mods'] = mods
             else:
                 return 'Invalid syntax: !with <mods/score> ...'
 
@@ -448,7 +450,7 @@ async def get_apikey(ctx: Context) -> str:
         'WHERE id = %s',
         [ctx.player.api_key, ctx.player.id]
     )
-    glob.api_keys.update({ctx.player.api_key: ctx.player.id})
+    glob.api_keys[ctx.player.api_key] = ctx.player.id
 
     ctx.player.enqueue(packets.notification('/savelog & click popup for an easy copy.'))
     return f'Your API key is now: {ctx.player.api_key}'
@@ -585,6 +587,7 @@ async def _map(ctx: Context) -> str:
                     icon_url = f'https://a.sakuru.pw/{ctx.player.id}'
                 )
 
+<<<<<<< HEAD
             embed.set_author(
                 url = f'https://sakuru.pw/direct?id={bmap.set_id}',
                 name = f'{bmap.artist} - {bmap.title}',
@@ -617,6 +620,10 @@ async def _map(ctx: Context) -> str:
             embed.set_image(url=f'https://assets.ppy.sh/beatmaps/{bmap.set_id}/covers/cover.jpg')
             webhook.add_embed(embed)
             await webhook.post(glob.http)
+=======
+                for bmap in glob.cache['beatmapset'][bmap.set_id].maps:
+                    bmap.status = new_status
+>>>>>>> 34cd2195f429002680768a6768f191f0a2e30c4d
 
     else:
         # update only map
@@ -667,7 +674,12 @@ async def _map(ctx: Context) -> str:
                 icon_url = 'https://sakuru.pw/static/ingame.png'
             )
 
+<<<<<<< HEAD
             length = str(datetime.timedelta(seconds = bmap.total_length))
+=======
+                if bmap.md5 in glob.cache['beatmap']:
+                    glob.cache['beatmap'][bmap.md5].status = new_status
+>>>>>>> 34cd2195f429002680768a6768f191f0a2e30c4d
 
             if bmap.total_length < 3600:
                 length = length[2:]
@@ -768,6 +780,11 @@ SHORTHAND_REASONS = {
     'au': 'using 3rd party programs (auto play)'
 }
 
+DURATION_MULTIPLIERS = {
+    's': 1, 'm': 60, 'h': 3600,
+    'd': 86400, 'w': 604800
+}
+
 @command(Privileges.Mod, hidden=True)
 async def silence(ctx: Context) -> str:
     """Silence a specified player with a specified duration & reason."""
@@ -783,15 +800,12 @@ async def silence(ctx: Context) -> str:
     ):
         return 'Only developers can manage staff members.'
 
-    if not (rgx := regexes.scaled_duration.match(ctx.args[1])):
+    if not (r_match := regexes.scaled_duration.match(ctx.args[1])):
         return 'Invalid syntax: !silence <name> <duration> <reason>'
 
-    multiplier = {
-        's': 1, 'm': 60, 'h': 3600,
-        'd': 86400, 'w': 604800
-    }[rgx['scale']]
+    multiplier = DURATION_MULTIPLIERS[r_match['scale']]
 
-    duration = int(rgx['duration']) * multiplier
+    duration = int(r_match['duration']) * multiplier
     reason = ' '.join(ctx.args[2:])
 
     if reason in SHORTHAND_REASONS:
@@ -825,6 +839,45 @@ async def unsilence(ctx: Context) -> str:
 # The commands below are relatively dangerous,
 # and are generally for managing players.
 """
+
+@command(Privileges.Admin, aliases=['u'], hidden=True)
+async def user(ctx: Context) -> str:
+    """Return general information about a given user."""
+    if not ctx.args:
+        # no username specified, use ctx.player
+        p = ctx.player
+    else:
+        # username given, fetch the player
+        p = await glob.players.get_ensure(name=' '.join(ctx.args))
+
+        if not p:
+            return 'Player not found.'
+
+    priv_readable = '|'.join(reversed([priv.name for priv in Privileges
+                                       if bin(priv).count('1') == 1]))
+
+    current_time = time.time()
+    login_delta = current_time - p.login_time
+    last_recv_delta = current_time - p.last_recv_time
+
+    if current_time < p.last_np['timeout']:
+        last_np = p.last_np['bmap'].embed
+    else:
+        last_np = None
+
+    return '\n'.join((
+        f'[{"Bot" if p.bot_client else "Player"}] {p.full_name} ({p.id})',
+        f'Privileges: {priv_readable}',
+        f'Channels: {[p._name for p in p.channels]}',
+        f'Logged in: {login_delta:.2f} sec ago',
+        f'Last server interaction: {last_recv_delta:.2f} sec ago',
+        f'osu! build: {p.osu_ver} | Tourney: {p.tourney_client}',
+        f'Silenced: {p.silenced} | Spectating: {p.spectating}',
+        f'Last /np: {last_np}',
+        f'Recent score: {p.recent_score}',
+        f'Match: {p.match}',
+        f'Spectators: {p.spectators}'
+    ))
 
 @command(Privileges.Admin, hidden=True)
 async def restrict(ctx: Context) -> str:
@@ -969,15 +1022,12 @@ async def shutdown(ctx: Context) -> str:
         _signal = signal.SIGTERM
 
     if ctx.args: # shutdown after a delay
-        if not (rgx := regexes.scaled_duration.match(ctx.args[0])):
+        if not (r_match := regexes.scaled_duration.match(ctx.args[0])):
             return f'Invalid syntax: !{ctx.trigger} <delay> <msg ...>'
 
-        multiplier = {
-            's': 1, 'm': 60, 'h': 3600,
-            'd': 86400, 'w': 604800
-        }[rgx['scale']]
+        multiplier = DURATION_MULTIPLIERS[r_match['scale']]
 
-        delay = int(rgx['duration']) * multiplier
+        delay = int(r_match['duration']) * multiplier
 
         if delay < 15:
             return 'Minimum delay is 15 seconds.'
@@ -989,8 +1039,7 @@ async def shutdown(ctx: Context) -> str:
 
             glob.players.enqueue(packets.notification(alert_msg))
 
-        loop = asyncio.get_running_loop()
-        loop.call_later(delay, os.kill, os.getpid(), _signal)
+        glob.loop.call_later(delay, os.kill, os.getpid(), _signal)
         return f'Enqueued {ctx.trigger}.'
     else: # shutdown immediately
         os.kill(os.getpid(), _signal)
@@ -1287,10 +1336,10 @@ async def wipemap(ctx: Context) -> str:
 #    """Temporary command to illustrate the menu option idea."""
 #    async def callback():
 #        # this is called when the menu item is clicked
-#        p.enqueue(packets.notification('clicked!'))
+#        ctx.player.enqueue(packets.notification('clicked!'))
 #
 #    # add the option to their menu opts & send them a button
-#    opt_id = await p.add_to_menu(callback)
+#    opt_id = await ctx.player.add_to_menu(callback)
 #    return f'[osump://{opt_id}/dn option]'
 
 @command(Privileges.Dangerous, aliases=['re'])
@@ -1312,7 +1361,11 @@ async def reload(ctx: Context) -> str:
     except AttributeError:
         return f'Failed at {child}.'
 
-    mod = importlib.reload(mod)
+    try:
+        mod = importlib.reload(mod)
+    except TypeError as exc:
+        return f'{exc.args[0]}.'
+
     return f'Reloaded {mod.__name__}'
 
 @command(Privileges.Normal)
@@ -1337,7 +1390,7 @@ async def server(ctx: Context) -> str:
         )
 
     # list of all cpus installed with thread count
-    cpus_info = ' | '.join(f'{v}x {k}' for k, v in model_names.most_common())
+    cpus_info = ' | '.join([f'{v}x {k}' for k, v in model_names.most_common()])
 
     # get system-wide ram usage
     sys_ram = psutil.virtual_memory()
@@ -1345,7 +1398,7 @@ async def server(ctx: Context) -> str:
     # output ram usage as `{gulag_used}MB / {sys_used}MB / {sys_total}MB`
     gulag_ram = proc.memory_info()[0]
     ram_values = (gulag_ram, sys_ram.used, sys_ram.total)
-    ram_info = ' / '.join(f'{v // 1024 ** 2}MB' for v in ram_values)
+    ram_info = ' / '.join([f'{v // 1024 ** 2}MB' for v in ram_values])
 
     # divide up pkg versions, 3 displayed per line, e.g.
     # aiohttp v3.6.3 | aiomysql v0.0.21 | bcrypt v3.2.0
@@ -1383,6 +1436,7 @@ async def server(ctx: Context) -> str:
 
 if glob.config.advanced:
     from sys import modules as installed_mods
+
     __py_namespace = globals() | {
         mod: __import__(mod) for mod in (
             'asyncio', 'dis', 'os', 'sys', 'struct', 'discord',
@@ -1463,7 +1517,7 @@ async def mp_start(ctx: Context) -> str:
             time_remaining = int(ctx.match.starting['time'] - time.time())
             return f'Match starting in {time_remaining} seconds.'
 
-        if any(s.status == SlotStatus.not_ready for s in ctx.match.slots):
+        if any([s.status == SlotStatus.not_ready for s in ctx.match.slots]):
             return 'Not all players are ready (`!mp start force` to override).'
     else:
         if ctx.args[0].isdecimal():
@@ -1499,10 +1553,9 @@ async def mp_start(ctx: Context) -> str:
 
             # add timers to our match object,
             # so we can cancel them if needed.
-            loop = asyncio.get_running_loop()
-            ctx.match.starting['start'] = loop.call_later(duration, _start)
+            ctx.match.starting['start'] = glob.loop.call_later(duration, _start)
             ctx.match.starting['alerts'] = [
-                loop.call_later(duration - t, lambda t=t: _alert_start(t))
+                glob.loop.call_later(duration - t, lambda t=t: _alert_start(t))
                 for t in (60, 30, 10, 5, 4, 3, 2, 1) if t < duration
             ]
             ctx.match.starting['time'] = time.time() + duration
@@ -1810,11 +1863,11 @@ async def mp_scrim(ctx: Context) -> str:
     """Start a scrim in the current match."""
     if (
         len(ctx.args) != 1 or
-        not (rgx := re.fullmatch(r'^(?:bo)?(\d{1,2})$', ctx.args[0]))
+        not (r_match := re.fullmatch(r'^(?:bo)?(\d{1,2})$', ctx.args[0]))
     ):
         return 'Invalid syntax: !mp scrim <bo#>'
 
-    if not 0 <= (best_of := int(rgx[1])) < 16:
+    if not 0 <= (best_of := int(r_match[1])) < 16:
         return 'Best of must be in range 0-15.'
 
     winning_pts = (best_of // 2) + 1
@@ -1948,12 +2001,12 @@ async def mp_ban(ctx: Context) -> str:
     mods_slot = ctx.args[0]
 
     # separate mods & slot
-    if not (rgx := regexes.mappool_pick.fullmatch(mods_slot)):
+    if not (r_match := regexes.mappool_pick.fullmatch(mods_slot)):
         return 'Invalid pick syntax; correct example: HD2'
 
     # not calling mods.filter_invalid_combos here intentionally.
-    mods = Mods.from_modstr(rgx[1])
-    slot = int(rgx[2])
+    mods = Mods.from_modstr(r_match[1])
+    slot = int(r_match[2])
 
     if (mods, slot) not in ctx.match.pool.maps:
         return f'Found no {mods_slot} pick in the pool.'
@@ -1976,12 +2029,12 @@ async def mp_unban(ctx: Context) -> str:
     mods_slot = ctx.args[0]
 
     # separate mods & slot
-    if not (rgx := regexes.mappool_pick.fullmatch(mods_slot)):
+    if not (r_match := regexes.mappool_pick.fullmatch(mods_slot)):
         return 'Invalid pick syntax; correct example: HD2'
 
     # not calling mods.filter_invalid_combos here intentionally.
-    mods = Mods.from_modstr(rgx[1])
-    slot = int(rgx[2])
+    mods = Mods.from_modstr(r_match[1])
+    slot = int(r_match[2])
 
     if (mods, slot) not in ctx.match.pool.maps:
         return f'Found no {mods_slot} pick in the pool.'
@@ -2004,12 +2057,12 @@ async def mp_pick(ctx: Context) -> str:
     mods_slot = ctx.args[0]
 
     # separate mods & slot
-    if not (rgx := regexes.mappool_pick.fullmatch(mods_slot)):
+    if not (r_match := regexes.mappool_pick.fullmatch(mods_slot)):
         return 'Invalid pick syntax; correct example: HD2'
 
     # not calling mods.filter_invalid_combos here intentionally.
-    mods = Mods.from_modstr(rgx[1])
-    slot = int(rgx[2])
+    mods = Mods.from_modstr(r_match[1])
+    slot = int(r_match[2])
 
     if (mods, slot) not in ctx.match.pool.maps:
         return f'Found no {mods_slot} pick in the pool.'
@@ -2127,15 +2180,15 @@ async def pool_add(ctx: Context) -> str:
     bmap = ctx.player.last_np['bmap']
 
     # separate mods & slot
-    if not (rgx := regexes.mappool_pick.fullmatch(mods_slot)):
+    if not (r_match := regexes.mappool_pick.fullmatch(mods_slot)):
         return 'Invalid pick syntax; correct example: HD2'
 
-    if len(rgx[1]) % 2 != 0:
+    if len(r_match[1]) % 2 != 0:
         return 'Invalid mods.'
 
     # not calling mods.filter_invalid_combos here intentionally.
-    mods = Mods.from_modstr(rgx[1])
-    slot = int(rgx[2])
+    mods = Mods.from_modstr(r_match[1])
+    slot = int(r_match[2])
 
     if not (pool := glob.pools.get(name)):
         return 'Could not find a pool by that name!'
@@ -2169,12 +2222,12 @@ async def pool_remove(ctx: Context) -> str:
     mods_slot = mods_slot.upper() # ocd
 
     # separate mods & slot
-    if not (rgx := regexes.mappool_pick.fullmatch(mods_slot)):
+    if not (r_match := regexes.mappool_pick.fullmatch(mods_slot)):
         return 'Invalid pick syntax; correct example: HD2'
 
     # not calling mods.filter_invalid_combos here intentionally.
-    mods = Mods.from_modstr(rgx[1])
-    slot = int(rgx[2])
+    mods = Mods.from_modstr(r_match[1])
+    slot = int(r_match[2])
 
     if not (pool := glob.pools.get(name)):
         return 'Could not find a pool by that name!'

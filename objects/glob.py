@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 
-# note that this is not used directly in this
-# module, but it frequently used through the
-# `glob.config.attr` syntax outside of here.
-import config  # NOQA
+import config # export
 
 # this file contains no actualy definitions
 if __import__('typing').TYPE_CHECKING:
+    from asyncio import AbstractEventLoop
     #from asyncio import Queue
     from typing import Optional
 
@@ -25,8 +23,8 @@ if __import__('typing').TYPE_CHECKING:
     from objects.collections import MapPools
     from objects.player import Player
     #from objects.score import Score
-    from packets import BanchoPacket
-    from packets import Packets
+    from packets import BasePacket
+    from packets import ClientPackets
 
 __all__ = (
     # current server state
@@ -35,7 +33,8 @@ __all__ = (
     'version', 'bot', 'api_keys',
     'bancho_packets', 'db',
     'has_internet', 'http',
-    'datadog', 'cache'#, 'sketchy_queue'
+    'datadog', 'cache', 'loop',
+    #'sketchy_queue'
 )
 
 # server object
@@ -47,7 +46,7 @@ channels: 'Channels'
 matches: 'Matches'
 clans: 'Clans'
 pools: 'MapPools'
-achievements: dict[int, list['Achievement']] # per vn gamemode
+achievements: list['Achievement']
 
 bot: 'Player'
 version: 'Version'
@@ -58,7 +57,7 @@ geoloc_db: 'Optional[geoip2.database.Reader]'
 api_keys: dict[str, int] # {api_key: player_id}
 
 # list of registered packets
-bancho_packets: dict['Packets', 'BanchoPacket']
+bancho_packets: dict['ClientPackets', 'BasePacket']
 
 # active connections
 db: 'AsyncSQLPool'
@@ -81,7 +80,8 @@ cache = {
     # are relatively frequently and won't change very frequently.
     # cache all beatmap data calculated while online. this way,
     # the most requested maps will inevitably always end up cached.
-    'beatmap': {}, # {md5: {timeout, map}, ...}
+    'beatmap': {}, # {md5: map, id: map, ...}
+    'beatmapset': {}, # {bsid: map_set}
 
     # cache all beatmaps which are unsubmitted or need an update,
     # since their osu!api requests will fail and thus we'll do the
@@ -89,6 +89,8 @@ cache = {
     'unsubmitted': set(), # {md5, ...}
     'needs_update': set() # {md5, ...}
 }
+
+loop: 'AbstractEventLoop'
 
 ''' (currently unused)
 # queue of submitted scores deemed 'sketchy'; to be analyzed.

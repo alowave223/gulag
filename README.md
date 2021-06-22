@@ -1,7 +1,7 @@
 [![Discord](https://discordapp.com/api/guilds/748687781605408908/widget.png?style=shield)](https://discord.gg/ShEQgUx)
 
 gulag is my implementation of an osu! server's backend (bancho protocol, /web/
-endpoints, avatars, static assets, and a devevloper rest api). it's designed as
+endpoints, avatars, static assets, and a developer rest api). it's designed as
 a modern substitution for existing osu! server projects who've become inactive
 or who've gone closed-source. i aim to make this project the ideal choice for
 running osu! private servers, and to fully support osu!'s protocol, while
@@ -12,20 +12,20 @@ private servers since early 2016, and founded [akatsuki](https://akatsuki.pw) in
 late 2017 using [ripple](https://github.com/osuripple)'s source with no prior
 development experience. i spent nearly all of my spare time learning more about
 the wonderful world of (osu!) programming by working on their codebase, until
-i had eventually learned enough to try writing a server from scratch.
+i had eventually learned enough to try writing a server from the ground up.
 
 gulag was my third attempt to write an osu! server, and based on my previous
 failures i didn't believe i had what it took to write a competitive server; but
 after months of development and gradual progress it's seemed more and more
 likely that it'd really become the replacement for akatsuki's existing stack.
 
-in my (pretty qualified) opinion (as someone who's really dove deep into most
-competing implementations), i'd definitely say gulag is currently the most
-maintainable, thoughtfully efficient and well suited for the operation of an
-osu! private server of anything i've seen. i think there are some great
-projects out there (especially some of the more modern ones), but frankly
-i've spent countless hours thinking about how i can improve the server and
-make it superior in a wide variety of different ways, not being scared to
+in my opinion, i think it's become the most maintainable, thoughtfully efficient
+and well suited for the operation of an osu! private server of anything i've seen.
+it's certainly not the fastest, but for the level of abstraction it's written at
+it's certainly much more efficient than any alternative options. there are some
+other great projects out there (especially some of the more modern ones), but
+frankly i've spent countless hours thinking about how i can improve the server
+and make it superior in a wide variety of different ways, not being scared to
 tear down & refactor large structures in the codebase as i learn more.
 i really think it's paid off, and i can say without a doubt that i plan to
 use this software for akatsuki. of course everyone has their biases and values
@@ -51,7 +51,7 @@ contributions are welcome but please don't feel like they're required; gulag's
 mostly my baby and i really want to get the master implementation as close to
 perfection as i can. if you're a dev and want to contribute, i'd strongly
 recommend forking the repository and playing around on a server of your own,
-this is how all previous high quality contributions have come into fruitition.
+this is how all previous high quality contributions have come into fruition.
 
 there is currently no official frontend project for gulag. the most serious
 attempt to date is [gulag-web](https://github.com/Varkaria/gulag-web), though
@@ -66,7 +66,7 @@ important notes:
 - i will not help with the creation of a fake *.ppy.sh cert for switcher support.
 
 ```sh
-# add ppa for py3.9 (i love anthonywritescode)
+# add ppa for py3.9 (i love asottile)
 sudo add-apt-repository ppa:deadsnakes/ppa
 
 # install requirements (py3.9, mysql, nginx, build tools, certbot)
@@ -136,7 +136,7 @@ Directory Structure
     ├── ext        # external files from gulag's primary operation.
     ├── objects    # code for representing players, scores, maps, and more.
     ├── utils      # utility functions used throughout the codebase for general purposes.
-    └── domains    # the route-continaing domains accessible to the public web.
+    └── domains    # the route-containing domains accessible to the public web.
         ├── cho    # (ce|c4|c5|c6).ppy.sh/* routes (bancho connections)
         ├── osu    # osu.ppy.sh/* routes (mainly /web/ & /api/)
         └── ava    # a.ppy.sh/* routes (avatars)

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 
-import dill as pickle
 import inspect
 import io
-import pymysql
+from re import I
 import requests
 import secrets
 import socket
@@ -14,8 +13,14 @@ from pathlib import Path
 from typing import Callable
 from typing import Sequence
 from typing import Type
+from typing import Union
+
+import aiomysql
+import dill as pickle
+import pymysql
 
 from objects import glob
+from constants.countries import country_codes
 from cmyui.logging import Ansi
 from cmyui.logging import log
 from cmyui.logging import printc
@@ -25,12 +30,16 @@ from cmyui.osu.replay import ReplayFrame
 __all__ = (
     'get_press_times',
     'make_safe_name',
+    'fetch_bot_name',
     'download_achievement_images',
     'seconds_readable',
     'check_connection',
     'install_excepthook',
     'get_appropriate_stacktrace',
     'log_strange_occurrence',
+
+    'fetch_geoloc_db',
+    'fetch_geoloc_web',
 
     'pymysql_encode',
     'escape_enum'
@@ -72,6 +81,21 @@ def get_press_times(frames: Sequence[ReplayFrame]) -> dict[Keys, float]:
 def make_safe_name(name: str) -> str:
     """Return a name safe for usage in sql."""
     return name.lower().replace(' ', '_')
+
+async def fetch_bot_name(db_cursor: aiomysql.DictCursor) -> str:
+    """Fetch the bot's name from the database, if available."""
+    await db_cursor.execute(
+        'SELECT name '
+        'FROM users '
+        'WHERE id = 1'
+    )
+
+    if db_cursor.rowcount == 0:
+        log("Couldn't find bot account in the database, "
+            "defaulting to BanchoBot for their name.", Ansi.LYELLOW)
+        return 'BanchoBot'
+
+    return (await db_cursor.fetchone())['name']
 
 def _download_achievement_images_mirror(achievements_path: Path) -> bool:
     """Download all used achievement images (using mirror's zip)."""
@@ -253,6 +277,54 @@ async def log_strange_occurrence(obj: object) -> None:
         printc('/'.join(log_file.parts[-4:]), Ansi.LBLUE)
 
         log("Greatly appreciated if you could forward this to cmyui#0425 :)", Ansi.LYELLOW)
+
+def fetch_geoloc_db(ip: str) -> dict[str, Union[str, float]]:
+    """Fetch geolocation data based on ip (using local db)."""
+    res = glob.geoloc_db.city(ip)
+
+    iso_code = res.country.iso_code
+
+    return {
+        'latitude': res.location.latitude,
+        'longitude': res.location.longitude,
+        'country': {
+            'iso_code': iso_code,
+            'numeric': country_codes[iso_code]
+        }
+    }
+
+async def fetch_geoloc_web(ip: str) -> dict[str, Union[str, float]]:
+    """Fetch geolocation data based on ip (using ip-api)."""
+    if not glob.has_internet: # requires internet connection
+        return
+
+    url = f'http://ip-api.com/line/{ip}'
+
+    async with glob.http.get(url) as resp:
+        if not resp or resp.status != 200:
+            log('Failed to get geoloc data: request failed.', Ansi.LRED)
+            return
+
+        status, *lines = (await resp.text()).split('\n')
+
+        if status != 'success':
+            err_msg = lines[0]
+            if err_msg == 'invalid query':
+                err_msg += f' ({url})'
+
+            log(f'Failed to get geoloc data: {err_msg}.', Ansi.LRED)
+            return
+
+    iso_code = lines[1]
+
+    return {
+        'latitude': float(lines[6]),
+        'longitude': float(lines[7]),
+        'country': {
+            'iso_code': iso_code,
+            'numeric': country_codes[iso_code]
+        }
+    }
 
 def pymysql_encode(conv: Callable) -> Callable:
     """Decorator to allow for adding to pymysql's encoders."""

@@ -166,6 +166,10 @@ class Score:
 
         self.prev_best: Optional[Score] = None
 
+    def __repr__(self) -> str: # maybe shouldn't be so long?
+        return (f'<{self.acc:.2f}% {self.max_combo}x {self.nmiss}M '
+                f'#{self.rank} on {self.bmap.full} for {self.pp:,.2f}pp>')
+
     """Classmethods to fetch a score object from various data types."""
 
     @classmethod
@@ -297,10 +301,10 @@ class Score:
         scores_table = self.mode.scores_table
 
         if self.mode >= GameMode.rx_std:
-            scoring = 'pp'
+            scoring_metric = 'pp'
             score = self.pp
         else:
-            scoring = 'score'
+            scoring_metric = 'score'
             score = self.score
 
         res = await glob.db.fetch(
@@ -308,7 +312,7 @@ class Score:
             'INNER JOIN users u ON u.id = s.userid '
             'WHERE s.map_md5 = %s AND s.mode = %s '
             'AND s.status = 2 AND u.priv & 1 '
-            f'AND s.{scoring} > %s',
+            f'AND s.{scoring_metric} > %s',
             [self.bmap.md5, self.mode.as_vanilla, score]
         )
 
