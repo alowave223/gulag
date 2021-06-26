@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import asyncio
 import copy
 import importlib
 import os
@@ -870,6 +869,7 @@ async def user(ctx: Context) -> str:
 @command(Privileges.Admin, hidden=True)
 async def restrict(ctx: Context) -> str:
     """Restrict a specified player's account, with a reason."""
+    print(ctx.args)
     if len(ctx.args) < 2:
         return 'Invalid syntax: !restrict <name> <reason>'
 
@@ -2466,8 +2466,7 @@ async def process_commands(p: Player, t: Messageable,
     # or simply False if we don't have any command hits.
     start_time = clock_ns()
 
-    prefix_len = len(glob.config.command_prefix)
-    trigger, *args = msg[prefix_len:].strip().split(' ', maxsplit=1)
+    trigger, *args = msg[len(glob.config.command_prefix):].strip().split(' ')
 
     # case-insensitive triggers
     trigger = trigger.lower()
