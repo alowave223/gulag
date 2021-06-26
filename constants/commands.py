@@ -563,10 +563,8 @@ async def _map(ctx: Context) -> str:
             [bmap.set_id], _dict=False
         )]
 
-        for cached in glob.cache['beatmap'].values():
-            # not going to bother checking timeout
-            if cached['map'].set_id == bmap.set_id:
-                cached['map'].status = new_status
+        for bmap in glob.cache['beatmapset'][bmap.set_id].maps:
+            bmap.status = new_status
 
         if new_status > 0:
             embed = Embed(
@@ -638,11 +636,8 @@ async def _map(ctx: Context) -> str:
 
         map_ids = [bmap.id]
 
-        for cached in glob.cache['beatmap'].values():
-            # not going to bother checking timeout
-            if cached['map'] is bmap:
-                cached['map'].status = new_status
-                break
+        for bmap in glob.cache['beatmapset'][bmap.set_id].maps:
+            bmap.status = new_status
         
         if new_status > 0:
             embed = Embed(
