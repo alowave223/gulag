@@ -9,12 +9,13 @@ import string
 import struct
 import time
 import datetime
-from collections import defaultdict
+import bcrypt
+
 from enum import IntEnum
 from enum import unique
 from functools import wraps
 from pathlib import Path
-from typing import Callable
+from typing import Callable, DefaultDict
 from typing import Optional
 from typing import TYPE_CHECKING
 from urllib.parse import unquote
@@ -24,9 +25,7 @@ from utils.recalculator import PPCalculator
 from circleparse import parse_replay_file
 
 import aiomysql
-import bcrypt
 import orjson
-import json
 from cmyui import _isdecimal
 from cmyui import Ansi
 from cmyui import Connection
@@ -245,9 +244,6 @@ async def osuGetBeatmapInfo(
     conn: Connection,
     db_cursor: aiomysql.DictCursor
 ) -> Optional[bytes]:
-    print('watafak')
-    print(conn.body)
-    print('watafak')
     data = orjson.loads(conn.body)
 
     num_requests = len(data['Filenames']) + len(data['Ids'])
@@ -1229,7 +1225,6 @@ async def getScores(
             # map is unsubmitted.
             # add this map to the unsubmitted cache, so
             # that we don't have to make this request again.
-            print('pizdec')
             glob.cache['unsubmitted'].add(map_md5)
             return b'-1|false'
 
@@ -1268,7 +1263,7 @@ async def getScores(
             query.append(f'AND s.userid IN ({friends_str}, {p.id})')
     elif rank_type == RankingType.Country:
         query.append('AND u.country = %s')
-        params.append(p.country[1])  # letters, not id
+        params.append(p.geoloc['country']['iso_code'])  # letters, not id
 
     query.append('ORDER BY _score DESC LIMIT 50')
 
@@ -2531,137 +2526,141 @@ async def peppyDMHandler(conn: Connection) -> Optional[bytes]:
 
 """ ingame registration """
 
-
 @domain.route('/users', methods=['POST'])
-@ratelimit(period=300, max_count=15)  # 15 registrations / 5mins
-async def register_account(conn: Connection) -> Optional[bytes]:
-    if glob.config.disable_ingame_reg:    
-        return (400, b'In-Game Registration is DISABLED Register FROM SITE! ^_^')
-    
-    # mp_args = conn.multipart_args
+@ratelimit(period=300, max_count=15) # 15 registrations / 5mins
+@acquire_db_conn(aiomysql.Cursor)
+async def register_account(
+    conn: Connection,
+    db_cursor: aiomysql.Cursor
+) -> Optional[bytes]:
+    # ensure all args passed
+    # are safe for registration.
+    errors = DefaultDict(list)
 
-    # name = mp_args['user[username]'].strip()
-    # email = mp_args['user[user_email]']
-    # pw_txt = mp_args['user[password]']
+    if glob.config.disable_ingame_reg:
+        errors['username'].append('Username already taken by another player.')
+        return (400, b'In-Game Registration is DISABLED')
 
-    # if not all((name, email, pw_txt)) or 'check' not in mp_args:
-    #     return (400, b'Missing required params')
+    mp_args = conn.multipart_args
 
-    # # ensure all args passed
-    # # are safe for registration.
-    # errors = defaultdict(list)
+    name = mp_args['user[username]'].strip()
+    email = mp_args['user[user_email]']
+    pw_txt = mp_args['user[password]']
 
-    # # Usernames must:
-    # # - be within 2-15 characters in length
-    # # - not contain both ' ' and '_', one is fine
-    # # - not be in the config's `disallowed_names` list
-    # # - not already be taken by another player
-    # if not regexes.username.match(name):
-    #     errors['username'].append('Must be 2-15 characters in length.')
+    if not all((name, email, pw_txt)) or 'check' not in mp_args:
+        return (400, b'Missing required params')
 
-    # if '_' in name and ' ' in name:
-    #     errors['username'].append('May contain "_" and " ", but not both.')
+    # Usernames must:
+    # - be within 2-15 characters in length
+    # - not contain both ' ' and '_', one is fine
+    # - not be in the config's `disallowed_names` list
+    # - not already be taken by another player
+    if not regexes.username.match(name):
+        errors['username'].append('Must be 2-15 characters in length.')
 
-    # if name in glob.config.disallowed_names:
-    #     errors['username'].append('Disallowed username; pick another.')
+    if '_' in name and ' ' in name:
+        errors['username'].append('May contain "_" and " ", but not both.')
 
-    # if 'username' not in errors:
-    #     await db_cursor.execute('SELECT 1 FROM users WHERE name = %s', [name])
-    #     if db_cursor.rowcount != 0:
-    #         errors['username'].append('Username already taken by another player.')
+    if name in glob.config.disallowed_names:
+        errors['username'].append('Disallowed username; pick another.')
 
-    # # Emails must:
-    # # - match the regex `^[^@\s]{1,200}@[^@\s\.]{1,30}\.[^@\.\s]{1,24}$`
-    # # - not already be taken by another player
-    # if not regexes.email.match(email):
-    #     errors['user_email'].append('Invalid email syntax.')
-    # else:
-    #     await db_cursor.execute('SELECT 1 FROM users WHERE email = %s', [email])
-    #     if db_cursor.rowcount != 0:
-    #         errors['user_email'].append('Email already taken by another player.')
+    if 'username' not in errors:
+        await db_cursor.execute('SELECT 1 FROM users WHERE name = %s', [name])
+        if db_cursor.rowcount != 0:
+            errors['username'].append('Username already taken by another player.')
 
-    # # Passwords must:
-    # # - be within 8-32 characters in length
-    # # - have more than 3 unique characters
-    # # - not be in the config's `disallowed_passwords` list
-    # if not 8 <= len(pw_txt) <= 32:
-    #     errors['password'].append('Must be 8-32 characters in length.')
+    # Emails must:
+    # - match the regex `^[^@\s]{1,200}@[^@\s\.]{1,30}\.[^@\.\s]{1,24}$`
+    # - not already be taken by another player
+    if not regexes.email.match(email):
+        errors['user_email'].append('Invalid email syntax.')
+    else:
+        await db_cursor.execute('SELECT 1 FROM users WHERE email = %s', [email])
+        if db_cursor.rowcount != 0:
+            errors['user_email'].append('Email already taken by another player.')
 
-    # if len(set(pw_txt)) <= 3:
-    #     errors['password'].append('Must have more than 3 unique characters.')
+    # Passwords must:
+    # - be within 8-32 characters in length
+    # - have more than 3 unique characters
+    # - not be in the config's `disallowed_passwords` list
+    if not 8 <= len(pw_txt) <= 32:
+        errors['password'].append('Must be 8-32 characters in length.')
 
-    # if pw_txt.lower() in glob.config.disallowed_passwords:
-    #     errors['password'].append('That password was deemed too simple.')
+    if len(set(pw_txt)) <= 3:
+        errors['password'].append('Must have more than 3 unique characters.')
 
-    # if errors:
-    #     # we have errors to send back, send them back delimited by newlines.
-    #     errors = {k: ['\n'.join(v)] for k, v in errors.items()}
-    #     errors_full = {'form_error': {'user': errors}}
-    #     return (400, orjson.dumps(errors_full))
+    if pw_txt.lower() in glob.config.disallowed_passwords:
+        errors['password'].append('That password was deemed too simple.')
 
-    # if mp_args['check'] == '0':
-    #     # the client isn't just checking values,
-    #     # they want to register the account now.
-    #     # make the md5 & bcrypt the md5 for sql.
-    #     async with glob.players._lock:
-    #         pw_md5 = hashlib.md5(pw_txt.encode()).hexdigest().encode()
-    #         pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
-    #         glob.cache['bcrypt'][pw_bcrypt] = pw_md5  # cache result for login
+    if errors:
+        # we have errors to send back, send them back delimited by newlines.
+        errors = {k: ['\n'.join(v)] for k, v in errors.items()}
+        errors_full = {'form_error': {'user': errors}}
+        return (400, orjson.dumps(errors_full))
 
-    #         safe_name = name.lower().replace(' ', '_')
+    if mp_args['check'] == '0':
+        # the client isn't just checking values,
+        # they want to register the account now.
+        # make the md5 & bcrypt the md5 for sql.
+        async with glob.players._lock:
+            pw_md5 = hashlib.md5(pw_txt.encode()).hexdigest().encode()
+            pw_bcrypt = bcrypt.hashpw(pw_md5, bcrypt.gensalt())
+            glob.cache['bcrypt'][pw_bcrypt] = pw_md5 # cache result for login
 
-    #         if 'CF-IPCountry' in conn.headers:
-    #             # best case, dev has enabled ip geolocation in the
-    #             # network tab of cloudflare, so it sends the iso code.
-    #             country = conn.headers['CF-IPCountry']
-    #         else:
-    #             # backup method, get the user's ip and
-    #             # do a db lookup to get their country.
-    #             if 'CF-Connecting-IP' in conn.headers:
-    #                 ip = conn.headers['CF-Connecting-IP']
-    #             else:
-    #                 # if the request has been forwarded, get the origin
-    #                 forwards = conn.headers['X-Forwarded-For'].split(',')
-    #                 if len(forwards) != 1:
-    #                     ip = forwards[0]
-    #                 else:
-    #                     ip = conn.headers['X-Real-IP']
+            safe_name = name.lower().replace(' ', '_')
 
-    #             if ip != '127.0.0.1':
-    #                 if glob.geoloc_db is not None:
-    #                     # decent case, dev has downloaded a geoloc db from
-    #                     # maxmind, so we can do a local db lookup. (~1-5ms)
-    #                     # https://www.maxmind.com/en/home
-    #                     geoloc = utils.misc.fetch_geoloc_db(ip)
-    #                 else:
-    #                     # worst case, we must do an external db lookup
-    #                     # using a public api. (depends, `ping ip-api.com`)
-    #                     geoloc = await utils.misc.fetch_geoloc_web(ip)
+            if 'CF-IPCountry' in conn.headers:
+                # best case, dev has enabled ip geolocation in the
+                # network tab of cloudflare, so it sends the iso code.
+                country = conn.headers['CF-IPCountry']
+            else:
+                # backup method, get the user's ip and
+                # do a db lookup to get their country.
+                if 'CF-Connecting-IP' in conn.headers:
+                    ip = conn.headers['CF-Connecting-IP']
+                else:
+                    # if the request has been forwarded, get the origin
+                    forwards = conn.headers['X-Forwarded-For'].split(',')
+                    if len(forwards) != 1:
+                        ip = forwards[0]
+                    else:
+                        ip = conn.headers['X-Real-IP']
 
-    #                 country = geoloc['country']
-    #             else:
-    #                 # localhost, unknown country
-    #                 country = 'XX'
+                if ip != '127.0.0.1':
+                    if glob.geoloc_db is not None:
+                        # decent case, dev has downloaded a geoloc db from
+                        # maxmind, so we can do a local db lookup. (~1-5ms)
+                        # https://www.maxmind.com/en/home
+                        geoloc = utils.misc.fetch_geoloc_db(ip)
+                    else:
+                        # worst case, we must do an external db lookup
+                        # using a public api. (depends, `ping ip-api.com`)
+                        geoloc = await utils.misc.fetch_geoloc_web(ip)
 
-    #         # add to `users` table.
-    #         await db_cursor.execute(
-    #             'INSERT INTO users '
-    #             '(name, safe_name, email, pw_bcrypt, country, creation_time, latest_activity) '
-    #             'VALUES (%s, %s, %s, %s, %s, UNIX_TIMESTAMP(), UNIX_TIMESTAMP())',
-    #             [name, safe_name, email, pw_bcrypt, country]
-    #         )
-    #         user_id = db_cursor.lastrowid
+                    country = geoloc['country']
+                else:
+                    # localhost, unknown country
+                    country = 'XX'
 
-    #         # add to `stats` table.
-    #         await db_cursor.execute(
-    #             'INSERT INTO stats '
-    #             '(id) VALUES (%s)',
-    #             [user_id]
-    #         )
+            # add to `users` table.
+            await db_cursor.execute(
+                'INSERT INTO users '
+                '(name, safe_name, email, pw_bcrypt, country, creation_time, latest_activity) '
+                'VALUES (%s, %s, %s, %s, %s, UNIX_TIMESTAMP(), UNIX_TIMESTAMP())',
+                [name, safe_name, email, pw_bcrypt, country]
+            )
+            user_id = db_cursor.lastrowid
 
-    #     if glob.datadog:
-    #         glob.datadog.increment('gulag.registrations')
+            # add to `stats` table.
+            await db_cursor.execute(
+                'INSERT INTO stats '
+                '(id) VALUES (%s)',
+                [user_id]
+            )
 
-    #     log(f'<{name} ({user_id})> has registered!', Ansi.LGREEN)
+        if glob.datadog:
+            glob.datadog.increment('gulag.registrations')
 
-    # return b'ok'  # success
+        log(f'<{name} ({user_id})> has registered!', Ansi.LGREEN)
+
+    return b'ok' # success

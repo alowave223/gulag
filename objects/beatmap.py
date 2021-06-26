@@ -548,9 +548,6 @@ class BeatmapSet:
                     [self.id, self.last_osuapi_check]
                 )
 
-                for bmap in self.maps:
-                    print(bmap.diff)
-
                 await db_cursor.executemany(
                     'REPLACE INTO maps ('
                         'server, md5, id, set_id, '
